@@ -1,63 +1,182 @@
+import { useState, useEffect } from 'react'
 import { ConnectKitButton } from 'connectkit'
 import { Link, useLocation } from 'react-router-dom'
-import { BarChart2, Shield, Zap } from 'lucide-react'
+import { BarChart2, Shield, Sun, Moon, Menu, X, TrendingUp, Briefcase } from 'lucide-react'
 import { loadConfig } from '../lib/adminConfig'
-
-const config = loadConfig()
+import { getTheme, toggleTheme, type Theme } from '../lib/theme'
 
 export default function Navbar() {
   const location = useLocation()
-  const isActive = (path: string) => location.pathname === path || location.pathname.startsWith(path + '/')
+  const [theme, setThemeState] = useState<Theme>(getTheme)
+  const [mobileOpen, setMobileOpen] = useState(false)
+  const config = loadConfig()
+
+  const isActive = (path: string) =>
+    path === '/' ? location.pathname === '/' : location.pathname.startsWith(path)
+
+  function handleToggleTheme() {
+    const next = toggleTheme()
+    setThemeState(next)
+  }
+
+  // Close mobile menu on route change — check mobileOpen first to avoid unnecessary re-renders
+  useEffect(() => {
+    if (mobileOpen) setMobileOpen(false)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.pathname])
+
+  const isDark = theme === 'dark'
 
   return (
-    <nav className="sticky top-0 z-50 border-b" style={{ borderColor: 'var(--border)', background: 'rgba(13,27,47,0.92)', backdropFilter: 'blur(12px)' }}>
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 h-14 flex items-center justify-between gap-4">
-        {/* Logo */}
-        <Link to="/" className="flex items-center gap-2 flex-shrink-0">
-          {config.logoUrl ? (
-            <img src={config.logoUrl} alt={config.siteName} className="h-7 w-7 object-contain" />
-          ) : (
-            <div className="h-7 w-7 rounded flex items-center justify-center" style={{ background: 'var(--accent)', color: '#0d1b2f' }}>
-              <Zap size={14} strokeWidth={2.5} />
+    <>
+      <nav
+        className="sticky top-0 z-50 border-b theme-transition"
+        style={{
+          borderColor: 'var(--border)',
+          background: 'var(--nav-bg)',
+          backdropFilter: 'blur(20px)',
+          WebkitBackdropFilter: 'blur(20px)',
+        }}
+      >
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-4">
+          {/* Logo */}
+          <Link to="/" className="flex items-center gap-2.5 flex-shrink-0 group">
+            {config.logoUrl ? (
+              <img src={config.logoUrl} alt={config.siteName} className="h-8 w-8 object-contain rounded-lg" />
+            ) : (
+              <div
+                className="h-8 w-8 rounded-xl flex items-center justify-center shadow-sm"
+                style={{ background: 'var(--accent)', color: 'var(--accent-text)' }}
+              >
+                <BarChart2 size={16} strokeWidth={2.5} />
+              </div>
+            )}
+            <div className="flex flex-col leading-none">
+              <span className="display font-700 text-[15px] tracking-tight" style={{ color: 'var(--ink)' }}>
+                {config.siteName || 'Predarc'}
+              </span>
+              <span className="text-[10px] font-medium tracking-widest uppercase" style={{ color: 'var(--subtle)' }}>
+                Prediction Markets
+              </span>
             </div>
-          )}
-          <span className="display font-700 text-base" style={{ color: 'var(--ink)' }}>{config.siteName}</span>
-        </Link>
-
-        {/* Nav links */}
-        <div className="hidden sm:flex items-center gap-1">
-          <NavLink to="/" active={location.pathname === '/'}>Markets</NavLink>
-          <NavLink to="/portfolio" active={isActive('/portfolio')}>Portfolio</NavLink>
-          <NavLink to="/activity" active={isActive('/activity')}>Activity</NavLink>
-        </div>
-
-        {/* Right */}
-        <div className="flex items-center gap-3">
-          <Link
-            to="/admin"
-            className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium transition-colors"
-            style={{ background: 'var(--surface)', color: 'var(--muted)', border: '1px solid var(--border)' }}
-          >
-            <Shield size={12} />
-            Admin
           </Link>
-          <ConnectKitButton />
+
+          {/* Desktop nav links */}
+          <div className="hidden md:flex items-center gap-1">
+            <NavLink to="/" active={isActive('/')} icon={<TrendingUp size={13} strokeWidth={2} />}>
+              Markets
+            </NavLink>
+            <NavLink to="/portfolio" active={isActive('/portfolio')} icon={<Briefcase size={13} strokeWidth={2} />}>
+              Portfolio
+            </NavLink>
+          </div>
+
+          {/* Right actions */}
+          <div className="flex items-center gap-2">
+            {/* Theme toggle */}
+            <button
+              onClick={handleToggleTheme}
+              className="h-9 w-9 rounded-xl flex items-center justify-center theme-transition"
+              style={{
+                background: 'var(--surface)',
+                border: '1px solid var(--border)',
+                color: 'var(--muted)',
+              }}
+              aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
+            >
+              {isDark ? <Sun size={14} strokeWidth={2} /> : <Moon size={14} strokeWidth={2} />}
+            </button>
+
+            {/* Admin link (desktop) */}
+            <Link
+              to="/admin"
+              className="hidden md:flex items-center gap-1.5 h-9 px-3 rounded-xl text-xs font-medium theme-transition"
+              style={{
+                background: 'var(--surface)',
+                border: '1px solid var(--border)',
+                color: 'var(--muted)',
+              }}
+            >
+              <Shield size={12} strokeWidth={2} />
+              Admin
+            </Link>
+
+            {/* Connect wallet */}
+            <ConnectKitButton />
+
+            {/* Mobile menu button */}
+            <button
+              onClick={() => setMobileOpen(o => !o)}
+              className="md:hidden h-9 w-9 rounded-xl flex items-center justify-center theme-transition"
+              style={{
+                background: 'var(--surface)',
+                border: '1px solid var(--border)',
+                color: 'var(--muted)',
+              }}
+              aria-label="Toggle menu"
+            >
+              {mobileOpen ? <X size={15} /> : <Menu size={15} />}
+            </button>
+          </div>
         </div>
-      </div>
-    </nav>
+
+        {/* Mobile menu */}
+        {mobileOpen && (
+          <div
+            className="md:hidden border-t px-4 py-3 flex flex-col gap-1 theme-transition"
+            style={{ borderColor: 'var(--border)', background: 'var(--nav-bg)' }}
+          >
+            <MobileNavLink to="/" active={isActive('/')} icon={<TrendingUp size={14} />}>Markets</MobileNavLink>
+            <MobileNavLink to="/portfolio" active={isActive('/portfolio')} icon={<Briefcase size={14} />}>Portfolio</MobileNavLink>
+            <MobileNavLink to="/admin" active={isActive('/admin')} icon={<Shield size={14} />}>Admin</MobileNavLink>
+          </div>
+        )}
+      </nav>
+
+      {/* Live indicator strip */}
+      <div
+        className="h-0.5 w-full"
+        style={{
+          background: `linear-gradient(90deg, transparent 0%, var(--accent) 50%, transparent 100%)`,
+          opacity: 0.4,
+        }}
+      />
+    </>
   )
 }
 
-function NavLink({ to, active, children }: { to: string; active: boolean; children: React.ReactNode }) {
+function NavLink({
+  to, active, icon, children,
+}: { to: string; active: boolean; icon?: React.ReactNode; children: React.ReactNode }) {
   return (
     <Link
       to={to}
-      className="px-3 py-1.5 rounded text-sm font-medium transition-colors"
+      className="flex items-center gap-1.5 px-3 h-9 rounded-xl text-sm font-medium theme-transition"
       style={{
-        color: active ? 'var(--ink)' : 'var(--subtle)',
+        color: active ? 'var(--ink)' : 'var(--muted)',
+        background: active ? 'var(--surface-strong)' : 'transparent',
+        border: active ? '1px solid var(--border)' : '1px solid transparent',
+      }}
+    >
+      {icon}
+      {children}
+    </Link>
+  )
+}
+
+function MobileNavLink({
+  to, active, icon, children,
+}: { to: string; active: boolean; icon?: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <Link
+      to={to}
+      className="flex items-center gap-2 px-3 py-2.5 rounded-xl text-sm font-medium theme-transition"
+      style={{
+        color: active ? 'var(--ink)' : 'var(--muted)',
         background: active ? 'var(--surface-strong)' : 'transparent',
       }}
     >
+      <span style={{ color: active ? 'var(--accent)' : 'var(--subtle)' }}>{icon}</span>
       {children}
     </Link>
   )

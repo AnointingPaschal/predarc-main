@@ -1,7 +1,7 @@
-import { useReadContract, useReadContracts } from 'wagmi'
+import { useReadContract } from 'wagmi'
 import { erc20Abi } from 'viem'
 import { arcTestnet } from 'viem/chains'
-import { PREDARC_ADDRESS, PREDARC_ABI, USDC_ADDRESS, Market } from '../lib/contract'
+import { PREDARC_ADDRESS, PREDARC_ABI, USDC_ADDRESS } from '../lib/contract'
 
 const CHAIN_ID = arcTestnet.id
 

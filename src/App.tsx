@@ -6,21 +6,24 @@ import MarketDetail from './pages/MarketDetail'
 import Portfolio from './pages/Portfolio'
 import AdminPanel from './pages/AdminPanel'
 import { loadConfig, applyCssVars } from './lib/adminConfig'
+import { applyTheme } from './lib/theme'
+import { TrendingUp } from 'lucide-react'
 
 export default function App() {
-  // Apply admin-configured CSS variables on mount
   useEffect(() => {
+    // Apply theme on mount (before first paint)
+    applyTheme()
+    // Apply admin-configured CSS variables
     const config = loadConfig()
     applyCssVars(config)
-    // Update page title
     document.title = config.siteName || 'Predarc'
   }, [])
 
   return (
     <BrowserRouter>
-      <div className="min-h-dvh" style={{ background: 'var(--bg-gradient)' }}>
+      <div className="min-h-dvh theme-transition" style={{ background: 'var(--bg-gradient)' }}>
         <Navbar />
-        <main>
+        <main className="pb-16">
           <Routes>
             <Route path="/" element={<MarketList />} />
             <Route path="/market/:id" element={<MarketDetail />} />
@@ -38,14 +41,55 @@ export default function App() {
 function Footer() {
   const config = loadConfig()
   return (
-    <footer className="mt-16 border-t py-6" style={{ borderColor: 'var(--border)' }}>
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 flex flex-col sm:flex-row items-center justify-between gap-2 text-xs" style={{ color: 'var(--subtle)' }}>
-        <span>{config.footerText}</span>
-        <div className="flex items-center gap-4">
-          {config.twitterUrl && <a href={config.twitterUrl} target="_blank" rel="noopener noreferrer" className="hover:opacity-80">Twitter</a>}
-          {config.discordUrl && <a href={config.discordUrl} target="_blank" rel="noopener noreferrer" className="hover:opacity-80">Discord</a>}
-          {config.githubUrl && <a href={config.githubUrl} target="_blank" rel="noopener noreferrer" className="hover:opacity-80">GitHub</a>}
-          <a href="/admin" className="hover:opacity-80">Admin</a>
+    <footer
+      className="border-t py-8 theme-transition"
+      style={{ borderColor: 'var(--border)', background: 'var(--surface)' }}
+    >
+      <div className="max-w-7xl mx-auto px-4 sm:px-6">
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
+          <div className="flex flex-col items-center sm:items-start gap-1">
+            <span className="display font-700 text-sm" style={{ color: 'var(--ink)' }}>
+              {config.siteName || 'Predarc'}
+            </span>
+            <span className="text-xs" style={{ color: 'var(--subtle)' }}>
+              {config.footerText || 'Powered by Arc. Built with Circle USDC.'}
+            </span>
+          </div>
+          <div className="flex items-center gap-5">
+            {config.twitterUrl && (
+              <a href={config.twitterUrl} target="_blank" rel="noopener noreferrer" className="text-xs theme-transition hover:opacity-80" style={{ color: 'var(--subtle)' }}>
+                Twitter
+              </a>
+            )}
+            {config.discordUrl && (
+              <a href={config.discordUrl} target="_blank" rel="noopener noreferrer" className="text-xs theme-transition hover:opacity-80" style={{ color: 'var(--subtle)' }}>
+                Discord
+              </a>
+            )}
+            {config.githubUrl && (
+              <a href={config.githubUrl} target="_blank" rel="noopener noreferrer" className="text-xs theme-transition hover:opacity-80" style={{ color: 'var(--subtle)' }}>
+                GitHub
+              </a>
+            )}
+            <a
+              href="/admin"
+              className="text-xs theme-transition hover:opacity-80"
+              style={{ color: 'var(--subtle)' }}
+            >
+              Admin
+            </a>
+          </div>
+        </div>
+        <div
+          className="mt-6 pt-4 flex items-center justify-center gap-2"
+          style={{ borderTop: '1px solid var(--border)' }}
+        >
+          <span className="text-xs" style={{ color: 'var(--subtle)' }}>
+            Built onchain with{' '}
+            <span style={{ color: 'var(--accent)' }}>USDC</span>
+            {' '}on{' '}
+            <span style={{ color: 'var(--accent)' }}>Arc</span>
+          </span>
         </div>
       </div>
     </footer>
@@ -54,10 +98,25 @@ function Footer() {
 
 function NotFound() {
   return (
-    <div className="max-w-xl mx-auto px-4 py-16 text-center">
-      <p className="text-4xl font-bold mb-4" style={{ color: 'var(--muted)' }}>404</p>
-      <p style={{ color: 'var(--subtle)' }}>Page not found.</p>
-      <a href="/" className="text-sm mt-4 block" style={{ color: 'var(--accent)' }}>Go home</a>
+    <div className="max-w-md mx-auto px-4 py-24 text-center">
+      <div
+        className="mx-auto mb-6 h-16 w-16 rounded-2xl flex items-center justify-center"
+        style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}
+      >
+        <TrendingUp size={28} style={{ color: 'var(--subtle)' }} />
+      </div>
+      <p className="display text-5xl font-700 mb-3" style={{ color: 'var(--surface-strong)' }}>404</p>
+      <p className="font-medium mb-1" style={{ color: 'var(--muted)' }}>Page not found</p>
+      <p className="text-sm mb-6" style={{ color: 'var(--subtle)' }}>
+        The page you're looking for doesn't exist.
+      </p>
+      <a
+        href="/"
+        className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium theme-transition"
+        style={{ background: 'var(--accent)', color: 'var(--accent-text)' }}
+      >
+        Back to Markets
+      </a>
     </div>
   )
 }

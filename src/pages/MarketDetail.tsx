@@ -1,17 +1,14 @@
-import { useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { ArrowLeft, Clock, ExternalLink, TrendingUp, CheckCircle } from 'lucide-react'
+import { ArrowLeft, Clock, TrendingUp, CheckCircle, ExternalLink } from 'lucide-react'
 import { useAccount } from 'wagmi'
-import { arcTestnet } from 'viem/chains'
 import { toast } from 'sonner'
-import { useMarket, useUserShares } from '../hooks/useMarkets'
+import { useMarket } from '../hooks/useMarkets'
 import { useRedeemWinnings } from '../hooks/useEscrow'
 import TradingPanel from '../components/TradingPanel'
 import {
   Market, MarketStatus, MarketType,
-  formatUsdc, getOddsDisplay, statusColor, statusLabel, timeUntil,
+  formatUsdc, statusColor, statusLabel, timeUntil,
 } from '../lib/contract'
-import { parseOnchainError } from '../lib/errors'
 
 export default function MarketDetail() {
   const { id } = useParams<{ id: string }>()

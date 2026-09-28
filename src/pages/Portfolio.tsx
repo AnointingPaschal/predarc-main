@@ -3,7 +3,7 @@ import { ConnectKitButton } from 'connectkit'
 import { useUserPositions, useAllMarkets, useUserShares, useUsdcBalance } from '../hooks/useMarkets'
 import { useRedeemWinnings } from '../hooks/useEscrow'
 import { Market, MarketStatus, formatUsdc } from '../lib/contract'
-import { toast } from 'sonner'
+
 import { Link } from 'react-router-dom'
 import { TrendingUp, Award } from 'lucide-react'
 

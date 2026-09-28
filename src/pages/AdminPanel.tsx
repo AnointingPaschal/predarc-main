@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { useAccount } from 'wagmi'
 import { ConnectKitButton } from 'connectkit'
 import { toast } from 'sonner'
-import { Shield, Plus, Settings, DollarSign, BarChart2, Palette, Globe, Save, Upload, RefreshCw } from 'lucide-react'
+import { Shield, Plus, Settings, DollarSign, BarChart2, Palette, Save, Upload, RefreshCw } from 'lucide-react'
 import { useAllMarkets, usePlatformFee, useFeeRecipient, useAccruedFees } from '../hooks/useMarkets'
 import {
   useCreateMarket, useResolveMarket, useResolveScalarMarket,
@@ -358,7 +358,7 @@ function FeesTab() {
           </div>
           <div className="flex justify-between text-sm">
             <span style={{ color: 'var(--subtle)' }}>Accrued fees</span>
-            <span className="tabular-nums font-medium" style={{ color: 'var(--success)' }}>${accrued !== undefined ? formatUsdc(accrued as bigint) : '—'}</span>
+            <span className="tabular-nums font-medium" style={{ color: 'var(--success)' }}>${accrued !== undefined ? formatUsdc(accrued) : '—'}</span>
           </div>
         </div>
       </div>
@@ -393,7 +393,7 @@ function FeesTab() {
         className="w-full py-3 rounded-lg text-sm font-semibold disabled:opacity-50"
         style={{ background: 'var(--success)', color: '#0d1b2f' }}
       >
-        {withdraw.isPending || withdraw.isConfirming ? 'Withdrawing...' : `Withdraw $${accrued !== undefined ? formatUsdc(accrued as bigint) : '0.00'} Fees`}
+        {withdraw.isPending || withdraw.isConfirming ? 'Withdrawing...' : `Withdraw $${accrued !== undefined ? formatUsdc(accrued) : '0.00'} Fees`}
       </button>
     </div>
   )

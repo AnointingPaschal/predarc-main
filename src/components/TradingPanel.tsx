@@ -2,11 +2,8 @@ import { useState, useEffect } from 'react'
 import { useAccount, useSwitchChain } from 'wagmi'
 import { arcTestnet } from 'viem/chains'
 import { toast } from 'sonner'
-import { ArrowUpDown, Info } from 'lucide-react'
-import {
-  Market, MarketStatus, MarketType,
-  formatUsdc, parseUsdc, USDC_DECIMALS,
-} from '../lib/contract'
+
+import { Market, MarketStatus, formatUsdc, parseUsdc } from '../lib/contract'
 import { parseOnchainError } from '../lib/errors'
 import { useUsdcBalance, useUsdcAllowance, useSharesOut, useUserShares } from '../hooks/useMarkets'
 import { useApproveUsdc, useBuyShares, useSellShares } from '../hooks/useEscrow'
@@ -92,7 +89,7 @@ export default function TradingPanel({ market, onSuccess }: Props) {
         approve.approve(parsedAmount * 10n) // approve 10x for convenience
         return
       }
-      const rawSharesOut = (sharesOut as bigint | undefined) ?? 0n
+      const rawSharesOut = (sharesOut) ?? 0n
       const minShares = rawSharesOut * 95n / 100n // 5% slippage
       buy.buy(market.id, BigInt(selectedOutcome), parsedAmount, minShares)
     } else {

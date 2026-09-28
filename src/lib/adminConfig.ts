@@ -85,9 +85,26 @@ export const DEFAULT_LIGHT: ThemeColors = {
   warning:     '#b45309',
 }
 
+// Values baked in at build time from Cloudflare environment variables.
+// These become the defaults — localStorage overrides layer on top per-browser.
+// Set these in Cloudflare Pages → Settings → Environment variables.
+const ENV = {
+  contractAddress:        (import.meta.env.VITE_CONTRACT_ADDRESS        as string | undefined) ?? '',
+  testnetContractAddress: (import.meta.env.VITE_TESTNET_CONTRACT_ADDRESS as string | undefined) ?? '',
+  network:                (import.meta.env.VITE_NETWORK                 as string | undefined) ?? 'mainnet',
+  rpcUrl:                 (import.meta.env.VITE_RPC_URL                 as string | undefined) ?? 'https://rpc.mainnet.arc.io',
+  usdcAddress:            (import.meta.env.VITE_USDC_ADDRESS            as string | undefined) ?? '0x3600000000000000000000000000000000000000',
+  adminWallet:            (import.meta.env.VITE_ADMIN_WALLET            as string | undefined) ?? '',
+  feeRecipient:           (import.meta.env.VITE_FEE_RECIPIENT           as string | undefined) ?? '',
+  chainlinkBtcFeed:       (import.meta.env.VITE_CHAINLINK_BTC_FEED      as string | undefined) ?? '',
+  chainlinkEthFeed:       (import.meta.env.VITE_CHAINLINK_ETH_FEED      as string | undefined) ?? '',
+  siteName:               (import.meta.env.VITE_SITE_NAME               as string | undefined) ?? 'Predarc',
+  tagline:                (import.meta.env.VITE_TAGLINE                 as string | undefined) ?? 'Predict. Trade. Win.',
+}
+
 export const DEFAULT_CONFIG: SiteConfig = {
-  siteName: 'Predarc',
-  tagline: 'Predict. Trade. Win.',
+  siteName: ENV.siteName,
+  tagline: ENV.tagline,
   logoUrl: '',
   darkTheme: DEFAULT_DARK,
   lightTheme: DEFAULT_LIGHT,
@@ -96,17 +113,17 @@ export const DEFAULT_CONFIG: SiteConfig = {
   twitterUrl: '',
   discordUrl: '',
   githubUrl: '',
-  network: 'mainnet',
-  contractAddress: '0xa78c2aa7a9ccff28ba42e59ae0a8c86f0da4e275',
-  testnetContractAddress: '0xa78c2aa7a9ccff28ba42e59ae0a8c86f0da4e275',
-  rpcUrl: 'https://rpc.mainnet.arc.io',
+  network: (ENV.network === 'testnet' ? 'testnet' : 'mainnet'),
+  contractAddress:        ENV.contractAddress        || '0xa78c2aa7a9ccff28ba42e59ae0a8c86f0da4e275',
+  testnetContractAddress: ENV.testnetContractAddress || '0xa78c2aa7a9ccff28ba42e59ae0a8c86f0da4e275',
+  rpcUrl:           ENV.rpcUrl,
   chainId: 5042,
-  usdcAddress: '0x3600000000000000000000000000000000000000',
+  usdcAddress:      ENV.usdcAddress,
   feeBps: 200,
-  feeRecipient: '',
-  adminWallet: '',
-  chainlinkBtcFeed: '',
-  chainlinkEthFeed: '',
+  feeRecipient:     ENV.feeRecipient,
+  adminWallet:      ENV.adminWallet,
+  chainlinkBtcFeed: ENV.chainlinkBtcFeed,
+  chainlinkEthFeed: ENV.chainlinkEthFeed,
   minLiquidityUsdc: 1,
   openrouterApiKey: '',
   openrouterModel: 'openai/gpt-4o-mini',
@@ -135,13 +152,22 @@ export function loadConfig(): SiteConfig {
     const raw = localStorage.getItem(ADMIN_CONFIG_KEY)
     if (!raw) return DEFAULT_CONFIG
     // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-    const parsed = JSON.parse(raw)
-    return {
+    const parsed = JSON.parse(raw) as Partial<SiteConfig>
+    const merged: SiteConfig = {
       ...DEFAULT_CONFIG,
-      ...(parsed as Partial<SiteConfig>),
-      darkTheme:  { ...DEFAULT_DARK,  ...((parsed as Partial<SiteConfig>).darkTheme  ?? {}) },
-      lightTheme: { ...DEFAULT_LIGHT, ...((parsed as Partial<SiteConfig>).lightTheme ?? {}) },
+      ...parsed,
+      darkTheme:  { ...DEFAULT_DARK,  ...(parsed.darkTheme  ?? {}) },
+      lightTheme: { ...DEFAULT_LIGHT, ...(parsed.lightTheme ?? {}) },
     }
+    // Env vars always win for contract addresses and wallet addresses —
+    // so the correct address is available on every device without manual config.
+    if (ENV.contractAddress)        merged.contractAddress        = ENV.contractAddress
+    if (ENV.testnetContractAddress) merged.testnetContractAddress = ENV.testnetContractAddress
+    if (ENV.adminWallet)            merged.adminWallet            = ENV.adminWallet
+    if (ENV.feeRecipient)           merged.feeRecipient           = ENV.feeRecipient
+    if (ENV.chainlinkBtcFeed)       merged.chainlinkBtcFeed       = ENV.chainlinkBtcFeed
+    if (ENV.chainlinkEthFeed)       merged.chainlinkEthFeed       = ENV.chainlinkEthFeed
+    return merged
   } catch {
     return DEFAULT_CONFIG
   }

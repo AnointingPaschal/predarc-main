@@ -35,8 +35,12 @@ export interface SiteConfig {
   discordUrl: string
   githubUrl: string
 
-  // Onchain config
-  contractAddress: string
+  // Network mode
+  network: 'mainnet' | 'testnet'
+
+  // Onchain config — separate per network
+  contractAddress: string       // mainnet contract
+  testnetContractAddress: string // testnet contract
   rpcUrl: string
   chainId: number
   usdcAddress: string
@@ -45,6 +49,7 @@ export interface SiteConfig {
   adminWallet: string
   chainlinkBtcFeed: string
   chainlinkEthFeed: string
+  minLiquidityUsdc: number  // minimum USDC for market creation (default 1)
 
   // AI config
   openrouterApiKey: string
@@ -91,7 +96,9 @@ export const DEFAULT_CONFIG: SiteConfig = {
   twitterUrl: '',
   discordUrl: '',
   githubUrl: '',
+  network: 'mainnet',
   contractAddress: '0xa78c2aa7a9ccff28ba42e59ae0a8c86f0da4e275',
+  testnetContractAddress: '0xa78c2aa7a9ccff28ba42e59ae0a8c86f0da4e275',
   rpcUrl: 'https://rpc.mainnet.arc.io',
   chainId: 5042,
   usdcAddress: '0x3600000000000000000000000000000000000000',
@@ -100,11 +107,27 @@ export const DEFAULT_CONFIG: SiteConfig = {
   adminWallet: '',
   chainlinkBtcFeed: '',
   chainlinkEthFeed: '',
+  minLiquidityUsdc: 1,
   openrouterApiKey: '',
   openrouterModel: 'openai/gpt-4o-mini',
   aiAutoGenEnabled: false,
   aiAutoGenInterval: 60,
   aiAutoGenCategories: 'Crypto,Sports,Politics',
+}
+
+// Returns the active contract address for the current network mode
+export function getActiveContractAddress(config: SiteConfig): string {
+  return config.network === 'testnet' ? config.testnetContractAddress : config.contractAddress
+}
+
+// Returns chain ID for the current network mode
+export function getActiveChainId(config: SiteConfig): number {
+  return config.network === 'testnet' ? 5042002 : 5042
+}
+
+// Returns RPC URL for the current network mode
+export function getActiveRpcUrl(config: SiteConfig): string {
+  return config.network === 'testnet' ? 'https://rpc.testnet.arc.network' : config.rpcUrl
 }
 
 export function loadConfig(): SiteConfig {

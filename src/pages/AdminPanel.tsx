@@ -12,11 +12,13 @@ import {
 } from '../hooks/useEscrow'
 import { useApproveUsdc } from '../hooks/useEscrow'
 import { Market, MarketStatus, MarketType, formatUsdc, parseUsdc, CATEGORIES } from '../lib/contract'
-import { loadConfig, saveConfig, DEFAULT_CONFIG, DEFAULT_DARK, DEFAULT_LIGHT, SiteConfig, ThemeColors } from '../lib/adminConfig'
+import { loadConfig, saveConfig, DEFAULT_CONFIG, DEFAULT_DARK, DEFAULT_LIGHT, SiteConfig, ThemeColors, getActiveContractAddress } from '../lib/adminConfig'
 import { OPENROUTER_MODELS } from '../lib/aiMarkets'
 import AIMarketGenerator from '../components/AIMarketGenerator'
 import type { AIMarketDraft } from '../lib/aiMarkets'
 import { parseOnchainError } from '../lib/errors'
+
+function activeAddress() { return getActiveContractAddress(loadConfig()) as `0x${string}` }
 
 type Tab = 'markets' | 'create' | 'fees' | 'branding' | 'config' | 'ai'
 
@@ -201,12 +203,12 @@ function AITab() {
         address: USDC_ADDRESS,
         abi: erc20Abi,
         functionName: 'approve',
-        args: [PREDARC_ADDRESS, liquidity * 2n],
+        args: [activeAddress(), liquidity],
       })
 
       // Create market
       await writeContractAsync({
-        address: PREDARC_ADDRESS,
+        address: activeAddress(),
         abi: PREDARC_ABI,
         functionName: 'createMarket',
         args: [
@@ -246,6 +248,8 @@ function CreateTab() {
   const create = useCreateMarket()
   const imageFileRef = useRef<HTMLInputElement>(null)
   const [imageMode, setImageMode] = useState<'url' | 'upload'>('url')
+  const cfg = loadConfig()
+  const minLiq = cfg.minLiquidityUsdc ?? 1
   const [form, setForm] = useState({
     marketType: '0',
     question: '',
@@ -256,7 +260,7 @@ function CreateTab() {
     scalarHigh: '100',
     category: 'Crypto',
     imageUrl: '',
-    initialLiquidity: '100',
+    initialLiquidity: String(minLiq),
   })
 
   useEffect(() => {
@@ -294,8 +298,8 @@ function CreateTab() {
     const resTs = BigInt(Math.floor(new Date(form.resolutionTime).getTime() / 1000))
     const liquidity = parseUsdc(form.initialLiquidity)
 
-    // Approve first
-    approve.approve(liquidity * 2n)
+    // Approve first (exact amount only)
+    approve.approve(liquidity)
 
     setTimeout(() => {
       create.create(
@@ -742,15 +746,54 @@ function ConfigTab() {
         These values are stored in your browser and used to configure the app. For production, set these via environment variables.
       </p>
 
-      <Field label="Contract Address">
-        <input value={config.contractAddress} onChange={e => setConfig(c => ({ ...c, contractAddress: e.target.value }))} className={inputCls + ' mono'} />
+      {/* Network Toggle */}
+      <div className="p-4 rounded-xl space-y-3" style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)' }}>
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-sm font-semibold" style={{ color: 'var(--ink)' }}>Network</p>
+            <p className="text-xs mt-0.5" style={{ color: 'var(--subtle)' }}>
+              {config.network === 'testnet'
+                ? 'Arc Testnet (chain 5042002) — free test USDC, safe for testing'
+                : 'Arc Mainnet (chain 5042) — real USDC, live trading'}
+            </p>
+          </div>
+          <div className="flex rounded-lg overflow-hidden flex-shrink-0" style={{ border: '1px solid var(--border)' }}>
+            {(['mainnet', 'testnet'] as const).map(n => (
+              <button
+                key={n}
+                onClick={() => setConfig(c => ({ ...c, network: n }))}
+                className="px-3 py-1.5 text-xs font-semibold capitalize transition-colors"
+                style={{
+                  background: config.network === n ? (n === 'mainnet' ? 'var(--accent)' : '#059669') : 'var(--surface-muted)',
+                  color: config.network === n ? '#fff' : 'var(--muted)',
+                }}
+              >
+                {n === 'mainnet' ? '🔴 Mainnet' : '🟢 Testnet'}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="text-xs px-3 py-2 rounded-lg" style={{
+          background: config.network === 'testnet' ? 'rgba(5,150,105,0.1)' : 'rgba(91,156,246,0.1)',
+          color: config.network === 'testnet' ? '#059669' : 'var(--accent)',
+          border: `1px solid ${config.network === 'testnet' ? 'rgba(5,150,105,0.3)' : 'rgba(91,156,246,0.3)'}`,
+        }}>
+          Active contract: {getActiveContractAddress(config) || '(not set)'}
+        </div>
+      </div>
+
+      <Field label="Mainnet Contract Address">
+        <input value={config.contractAddress} onChange={e => setConfig(c => ({ ...c, contractAddress: e.target.value }))} placeholder="0x... (deployed on Arc Mainnet)" className={inputCls + ' mono'} />
+      </Field>
+      <Field label="Testnet Contract Address">
+        <input value={config.testnetContractAddress} onChange={e => setConfig(c => ({ ...c, testnetContractAddress: e.target.value }))} placeholder="0x... (deployed on Arc Testnet)" className={inputCls + ' mono'} />
       </Field>
       <div className="grid grid-cols-2 gap-3">
-        <Field label="RPC URL">
+        <Field label="Mainnet RPC URL">
           <input value={config.rpcUrl} onChange={e => setConfig(c => ({ ...c, rpcUrl: e.target.value }))} className={inputCls} />
         </Field>
-        <Field label="Chain ID">
-          <input type="number" value={config.chainId} onChange={e => setConfig(c => ({ ...c, chainId: parseInt(e.target.value) }))} className={inputCls + ' tabular-nums'} />
+        <Field label="Min Liquidity (USDC)">
+          <input type="number" min={1} step={1} value={config.minLiquidityUsdc} onChange={e => setConfig(c => ({ ...c, minLiquidityUsdc: Math.max(1, parseInt(e.target.value) || 1) }))} className={inputCls + ' tabular-nums'} />
         </Field>
       </div>
       <Field label="USDC Address">

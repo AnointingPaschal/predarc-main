@@ -45,6 +45,13 @@ export interface SiteConfig {
   adminWallet: string
   chainlinkBtcFeed: string
   chainlinkEthFeed: string
+
+  // AI config
+  openrouterApiKey: string
+  openrouterModel: string
+  aiAutoGenEnabled: boolean
+  aiAutoGenInterval: number   // minutes between auto-generated markets
+  aiAutoGenCategories: string // comma-separated list of categories to auto-generate
 }
 
 export const DEFAULT_DARK: ThemeColors = {
@@ -93,6 +100,11 @@ export const DEFAULT_CONFIG: SiteConfig = {
   adminWallet: '',
   chainlinkBtcFeed: '',
   chainlinkEthFeed: '',
+  openrouterApiKey: '',
+  openrouterModel: 'openai/gpt-4o-mini',
+  aiAutoGenEnabled: false,
+  aiAutoGenInterval: 60,
+  aiAutoGenCategories: 'Crypto,Sports,Politics',
 }
 
 export function loadConfig(): SiteConfig {

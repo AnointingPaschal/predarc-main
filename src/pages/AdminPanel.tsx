@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { useAccount } from 'wagmi'
 import { ConnectKitButton } from 'connectkit'
 import { toast } from 'sonner'
-import { Shield, Plus, Settings, DollarSign, BarChart2, Palette, Save, Upload, RefreshCw } from 'lucide-react'
+import { Shield, Plus, Settings, DollarSign, BarChart2, Palette, Save, Upload, RefreshCw, Sparkles } from 'lucide-react'
 import { useAllMarkets, usePlatformFee, useFeeRecipient, useAccruedFees } from '../hooks/useMarkets'
 import {
   useCreateMarket, useResolveMarket, useResolveScalarMarket,
@@ -11,9 +11,12 @@ import {
 import { useApproveUsdc } from '../hooks/useEscrow'
 import { Market, MarketStatus, MarketType, formatUsdc, parseUsdc, CATEGORIES } from '../lib/contract'
 import { loadConfig, saveConfig, DEFAULT_CONFIG, DEFAULT_DARK, DEFAULT_LIGHT, SiteConfig, ThemeColors } from '../lib/adminConfig'
+import { OPENROUTER_MODELS } from '../lib/aiMarkets'
+import AIMarketGenerator from '../components/AIMarketGenerator'
+import type { AIMarketDraft } from '../lib/aiMarkets'
 import { parseOnchainError } from '../lib/errors'
 
-type Tab = 'markets' | 'create' | 'fees' | 'branding' | 'config'
+type Tab = 'markets' | 'create' | 'fees' | 'branding' | 'config' | 'ai'
 
 export default function AdminPanel() {
   const { address } = useAccount()
@@ -33,6 +36,7 @@ export default function AdminPanel() {
   const tabs: { id: Tab; label: string; icon: React.ReactNode }[] = [
     { id: 'markets', label: 'Markets', icon: <BarChart2 size={14} /> },
     { id: 'create', label: 'Create', icon: <Plus size={14} /> },
+    { id: 'ai', label: 'AI', icon: <Sparkles size={14} /> },
     { id: 'fees', label: 'Fees', icon: <DollarSign size={14} /> },
     { id: 'branding', label: 'Branding', icon: <Palette size={14} /> },
     { id: 'config', label: 'Config', icon: <Settings size={14} /> },
@@ -65,6 +69,7 @@ export default function AdminPanel() {
 
       {tab === 'markets' && <MarketsTab />}
       {tab === 'create' && <CreateTab />}
+      {tab === 'ai' && <AITab />}
       {tab === 'fees' && <FeesTab />}
       {tab === 'branding' && <BrandingTab />}
       {tab === 'config' && <ConfigTab />}
@@ -177,6 +182,35 @@ function MarketsTab() {
   )
 }
 
+function AITab() {
+  const [pendingDrafts, setPendingDrafts] = useState<AIMarketDraft[]>([])
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-xl p-4" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+        <p className="text-sm font-semibold mb-1" style={{ color: 'var(--ink)' }}>AI Market Generator</p>
+        <p className="text-xs" style={{ color: 'var(--subtle)' }}>
+          Generate markets from a topic, news headlines, or let AI pick trending events automatically. Markets are drafted here — review them, then click Use to load into the Create tab.
+        </p>
+      </div>
+      <AIMarketGenerator onUseMarket={d => setPendingDrafts(p => [...p, d])} />
+      {pendingDrafts.length > 0 && (
+        <div className="rounded-xl p-4" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+          <p className="text-xs font-semibold mb-2" style={{ color: 'var(--muted)' }}>{pendingDrafts.length} market{pendingDrafts.length > 1 ? 's' : ''} ready — go to the Create tab to deploy each one</p>
+          <div className="space-y-1">
+            {pendingDrafts.map((d, i) => (
+              <div key={i} className="flex items-center justify-between px-3 py-2 rounded-lg" style={{ background: 'var(--surface-muted)' }}>
+                <p className="text-xs truncate flex-1 mr-2" style={{ color: 'var(--ink)' }}>{d.question}</p>
+                <button onClick={() => setPendingDrafts(p => p.filter((_, idx) => idx !== i))} className="text-xs" style={{ color: 'var(--danger)' }}>Remove</button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function CreateTab() {
   const approve = useApproveUsdc()
   const create = useCreateMarket()
@@ -249,7 +283,30 @@ function CreateTab() {
 
   const isLoading = approve.isPending || approve.isConfirming || create.isPending || create.isConfirming
 
+  const applyDraft = (draft: AIMarketDraft) => {
+    const now = new Date()
+    const endDate = new Date(now.getTime() + draft.suggestedDurationDays * 24 * 60 * 60 * 1000)
+    const resDate = new Date(endDate.getTime() + 24 * 60 * 60 * 1000)
+    const fmt = (d: Date) => d.toISOString().slice(0, 16)
+    setForm({
+      marketType: String(draft.marketType),
+      question: draft.question,
+      outcomes: draft.outcomes,
+      endTime: fmt(endDate),
+      resolutionTime: fmt(resDate),
+      scalarLow: String(draft.scalarLow),
+      scalarHigh: String(draft.scalarHigh),
+      category: draft.category,
+      imageUrl: draft.imageUrl,
+      initialLiquidity: String(draft.suggestedLiquidity),
+    })
+    toast.success('Market loaded from AI — review and deploy')
+  }
+
   return (
+    <div className="space-y-4">
+      <AIMarketGenerator onUseMarket={applyDraft} />
+
     <div className="rounded-xl p-5 space-y-4" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
       <h2 className="text-sm font-semibold" style={{ color: 'var(--ink)' }}>Create New Market</h2>
 
@@ -323,6 +380,7 @@ function CreateTab() {
       >
         {isLoading ? 'Creating...' : 'Create Market'}
       </button>
+    </div>
     </div>
   )
 }
@@ -625,6 +683,86 @@ function ConfigTab() {
         <Field label="Chainlink ETH/USD Feed">
           <input value={config.chainlinkEthFeed} onChange={e => setConfig(c => ({ ...c, chainlinkEthFeed: e.target.value }))} placeholder="0x..." className={inputCls + ' mono'} />
         </Field>
+      </div>
+
+      {/* AI Settings */}
+      <div className="pt-2 border-t" style={{ borderColor: 'var(--border)' }}>
+        <div className="flex items-center gap-2 mb-3">
+          <Sparkles size={14} style={{ color: '#8b5cf6' }} />
+          <h3 className="text-sm font-semibold" style={{ color: 'var(--ink)' }}>AI Settings (OpenRouter)</h3>
+        </div>
+        <p className="text-xs mb-3" style={{ color: 'var(--subtle)' }}>
+          Get a free API key at <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent)' }}>openrouter.ai/keys</a>. Your key is stored only in this browser.
+        </p>
+        <div className="space-y-3">
+          <Field label="OpenRouter API Key">
+            <input
+              type="password"
+              value={config.openrouterApiKey}
+              onChange={e => setConfig(c => ({ ...c, openrouterApiKey: e.target.value }))}
+              placeholder="sk-or-v1-..."
+              className={inputCls + ' mono'}
+              autoComplete="off"
+            />
+          </Field>
+          <Field label="AI Model">
+            <select
+              value={config.openrouterModel}
+              onChange={e => setConfig(c => ({ ...c, openrouterModel: e.target.value }))}
+              className={selectCls}
+            >
+              {OPENROUTER_MODELS.map(m => (
+                <option key={m.id} value={m.id}>{m.label}</option>
+              ))}
+              <option value="custom">Custom model ID</option>
+            </select>
+          </Field>
+          {config.openrouterModel === 'custom' && (
+            <Field label="Custom Model ID">
+              <input
+                value={config.openrouterModel}
+                onChange={e => setConfig(c => ({ ...c, openrouterModel: e.target.value }))}
+                placeholder="e.g. openai/gpt-4-turbo"
+                className={inputCls + ' mono'}
+              />
+            </Field>
+          )}
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Auto-gen interval (minutes)">
+              <input
+                type="number"
+                min={15}
+                value={config.aiAutoGenInterval}
+                onChange={e => setConfig(c => ({ ...c, aiAutoGenInterval: parseInt(e.target.value) || 60 }))}
+                className={inputCls}
+              />
+            </Field>
+            <Field label="Auto-gen categories">
+              <input
+                value={config.aiAutoGenCategories}
+                onChange={e => setConfig(c => ({ ...c, aiAutoGenCategories: e.target.value }))}
+                placeholder="Crypto,Sports,Politics"
+                className={inputCls}
+              />
+            </Field>
+          </div>
+          <div className="flex items-center justify-between px-3 py-2.5 rounded-xl" style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)' }}>
+            <div>
+              <p className="text-xs font-medium" style={{ color: 'var(--ink)' }}>Enable auto-generation</p>
+              <p className="text-[10px]" style={{ color: 'var(--subtle)' }}>AI will draft new markets at the interval above (requires admin panel open)</p>
+            </div>
+            <button
+              onClick={() => setConfig(c => ({ ...c, aiAutoGenEnabled: !c.aiAutoGenEnabled }))}
+              className="h-6 w-11 rounded-full transition-colors flex-shrink-0 relative"
+              style={{ background: config.aiAutoGenEnabled ? 'var(--accent)' : 'var(--border)' }}
+            >
+              <span
+                className="absolute top-0.5 h-5 w-5 rounded-full bg-white transition-transform"
+                style={{ left: config.aiAutoGenEnabled ? '22px' : '2px' }}
+              />
+            </button>
+          </div>
+        </div>
       </div>
 
       <button onClick={handleSave} className="w-full py-3 rounded-lg text-sm font-semibold flex items-center justify-center gap-2" style={{ background: 'var(--accent)', color: '#0d1b2f' }}>

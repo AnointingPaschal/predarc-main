@@ -10,7 +10,7 @@ import {
 } from '../hooks/useEscrow'
 import { useApproveUsdc } from '../hooks/useEscrow'
 import { Market, MarketStatus, MarketType, formatUsdc, parseUsdc, CATEGORIES } from '../lib/contract'
-import { loadConfig, saveConfig, DEFAULT_CONFIG, SiteConfig } from '../lib/adminConfig'
+import { loadConfig, saveConfig, DEFAULT_CONFIG, DEFAULT_DARK, DEFAULT_LIGHT, SiteConfig, ThemeColors } from '../lib/adminConfig'
 import { parseOnchainError } from '../lib/errors'
 
 type Tab = 'markets' | 'create' | 'fees' | 'branding' | 'config'
@@ -399,8 +399,74 @@ function FeesTab() {
   )
 }
 
+type ThemeMode = 'dark' | 'light'
+
+const THEME_COLOR_FIELDS: { key: keyof ThemeColors; label: string; isColor: boolean }[] = [
+  { key: 'bg',          label: 'Background',   isColor: false },
+  { key: 'surface',     label: 'Surface',       isColor: false },
+  { key: 'surfaceMuted',label: 'Surface Muted', isColor: false },
+  { key: 'ink',         label: 'Text',          isColor: true  },
+  { key: 'muted',       label: 'Muted Text',    isColor: true  },
+  { key: 'accent',      label: 'Accent',        isColor: true  },
+  { key: 'border',      label: 'Border',        isColor: false },
+  { key: 'success',     label: 'Success',       isColor: true  },
+  { key: 'danger',      label: 'Danger',        isColor: true  },
+  { key: 'warning',     label: 'Warning',       isColor: true  },
+]
+
+function ThemeEditor({
+  label, theme, defaults, onChange,
+}: {
+  label: string
+  theme: ThemeColors
+  defaults: ThemeColors
+  onChange: (t: ThemeColors) => void
+}) {
+  return (
+    <div className="rounded-xl p-4 space-y-3" style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)' }}>
+      <div className="flex items-center justify-between mb-1">
+        <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--accent)' }}>{label}</span>
+        <button
+          onClick={() => onChange(label === 'Dark Mode' ? DEFAULT_DARK : DEFAULT_LIGHT)}
+          className="text-xs px-2 py-1 rounded-lg"
+          style={{ background: 'var(--surface)', color: 'var(--subtle)', border: '1px solid var(--border)' }}
+        >
+          Reset
+        </button>
+      </div>
+      {THEME_COLOR_FIELDS.map(({ key, label: fieldLabel, isColor }) => {
+        const val = theme[key] ?? defaults[key]
+        const isHex = /^#[0-9a-fA-F]{3,8}$/.test(val)
+        return (
+          <div key={key} className="flex items-center gap-2">
+            <label className="text-xs w-28 flex-shrink-0" style={{ color: 'var(--subtle)' }}>{fieldLabel}</label>
+            {isHex && isColor ? (
+              <input
+                type="color"
+                value={val}
+                onChange={e => onChange({ ...theme, [key]: e.target.value })}
+                className="h-7 w-8 rounded cursor-pointer border-0 flex-shrink-0"
+                style={{ background: 'transparent' }}
+              />
+            ) : (
+              <div className="h-7 w-8 rounded flex-shrink-0 border" style={{ background: val, borderColor: 'var(--border)' }} />
+            )}
+            <input
+              value={val}
+              onChange={e => onChange({ ...theme, [key]: e.target.value })}
+              className="flex-1 px-2 py-1 rounded-lg text-xs outline-none"
+              style={{ background: 'var(--surface)', border: '1px solid var(--border)', color: 'var(--ink)' }}
+            />
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 function BrandingTab() {
   const [config, setConfig] = useState<SiteConfig>(loadConfig)
+  const [themeTab, setThemeTab] = useState<ThemeMode>('dark')
   const fileRef = useRef<HTMLInputElement>(null)
 
   const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -417,79 +483,100 @@ function BrandingTab() {
   }
 
   return (
-    <div className="rounded-xl p-5 space-y-4" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
-      <h2 className="text-sm font-semibold" style={{ color: 'var(--ink)' }}>Branding</h2>
+    <div className="space-y-4">
+      {/* Identity */}
+      <div className="rounded-xl p-5 space-y-4" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+        <h2 className="text-sm font-semibold" style={{ color: 'var(--ink)' }}>Identity</h2>
 
-      <Field label="Site Name">
-        <input value={config.siteName} onChange={e => setConfig(c => ({ ...c, siteName: e.target.value }))} className={inputCls} />
-      </Field>
-      <Field label="Tagline">
-        <input value={config.tagline} onChange={e => setConfig(c => ({ ...c, tagline: e.target.value }))} className={inputCls} />
-      </Field>
+        <Field label="Site Name">
+          <input value={config.siteName} onChange={e => setConfig(c => ({ ...c, siteName: e.target.value }))} className={inputCls} />
+        </Field>
+        <Field label="Tagline">
+          <input value={config.tagline} onChange={e => setConfig(c => ({ ...c, tagline: e.target.value }))} className={inputCls} />
+        </Field>
 
-      <Field label="Logo">
-        <div className="flex items-center gap-3">
-          {config.logoUrl && <img src={config.logoUrl} alt="Logo" className="h-10 w-10 object-contain rounded" />}
-          <button
-            onClick={() => fileRef.current?.click()}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs"
-            style={{ background: 'var(--surface-strong)', color: 'var(--muted)', border: '1px solid var(--border)' }}
-          >
-            <Upload size={12} /> Upload Logo
-          </button>
-          <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={handleLogoUpload} />
+        <Field label="Logo">
+          <div className="flex items-center gap-3">
+            {config.logoUrl && <img src={config.logoUrl} alt="Logo" className="h-10 w-10 object-contain rounded-lg" />}
+            <button
+              onClick={() => fileRef.current?.click()}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs"
+              style={{ background: 'var(--surface-strong)', color: 'var(--muted)', border: '1px solid var(--border)' }}
+            >
+              <Upload size={12} /> Upload Logo
+            </button>
+            <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={handleLogoUpload} />
+          </div>
+        </Field>
+
+        <Field label="Footer Text">
+          <input value={config.footerText} onChange={e => setConfig(c => ({ ...c, footerText: e.target.value }))} className={inputCls} />
+        </Field>
+
+        <div className="grid grid-cols-3 gap-3">
+          <Field label="Twitter"><input value={config.twitterUrl} onChange={e => setConfig(c => ({ ...c, twitterUrl: e.target.value }))} placeholder="https://..." className={inputCls} /></Field>
+          <Field label="Discord"><input value={config.discordUrl} onChange={e => setConfig(c => ({ ...c, discordUrl: e.target.value }))} placeholder="https://..." className={inputCls} /></Field>
+          <Field label="GitHub"><input value={config.githubUrl} onChange={e => setConfig(c => ({ ...c, githubUrl: e.target.value }))} placeholder="https://..." className={inputCls} /></Field>
         </div>
-      </Field>
-
-      <div className="grid grid-cols-2 gap-3">
-        <Field label="Primary Color">
-          <div className="flex gap-2 items-center">
-            <input type="color" value={config.primaryColor} onChange={e => setConfig(c => ({ ...c, primaryColor: e.target.value }))} className="h-9 w-12 rounded cursor-pointer border-0 bg-transparent" />
-            <input value={config.primaryColor} onChange={e => setConfig(c => ({ ...c, primaryColor: e.target.value }))} className={inputCls + ' flex-1'} />
-          </div>
-        </Field>
-        <Field label="Background Color">
-          <div className="flex gap-2 items-center">
-            <input type="color" value={config.bgColor} onChange={e => setConfig(c => ({ ...c, bgColor: e.target.value }))} className="h-9 w-12 rounded cursor-pointer border-0 bg-transparent" />
-            <input value={config.bgColor} onChange={e => setConfig(c => ({ ...c, bgColor: e.target.value }))} className={inputCls + ' flex-1'} />
-          </div>
-        </Field>
-        <Field label="Text Color">
-          <div className="flex gap-2 items-center">
-            <input type="color" value={config.inkColor} onChange={e => setConfig(c => ({ ...c, inkColor: e.target.value }))} className="h-9 w-12 rounded cursor-pointer border-0 bg-transparent" />
-            <input value={config.inkColor} onChange={e => setConfig(c => ({ ...c, inkColor: e.target.value }))} className={inputCls + ' flex-1'} />
-          </div>
-        </Field>
-        <Field label="Border Color">
-          <div className="flex gap-2 items-center">
-            <input type="color" value={config.borderColor} onChange={e => setConfig(c => ({ ...c, borderColor: e.target.value }))} className="h-9 w-12 rounded cursor-pointer border-0 bg-transparent" />
-            <input value={config.borderColor} onChange={e => setConfig(c => ({ ...c, borderColor: e.target.value }))} className={inputCls + ' flex-1'} />
-          </div>
-        </Field>
       </div>
 
-      <Field label="Custom CSS">
+      {/* Theme Colors */}
+      <div className="rounded-xl p-5 space-y-4" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+        <h2 className="text-sm font-semibold" style={{ color: 'var(--ink)' }}>Theme Colors</h2>
+        <p className="text-xs" style={{ color: 'var(--subtle)' }}>
+          Configure separate color tokens for dark mode and light mode. Changes apply live when saved.
+        </p>
+
+        {/* Mode tabs */}
+        <div className="flex gap-1 rounded-lg p-1" style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)' }}>
+          {(['dark', 'light'] as ThemeMode[]).map(m => (
+            <button
+              key={m}
+              onClick={() => setThemeTab(m)}
+              className="flex-1 py-1.5 rounded-md text-xs font-semibold transition-all"
+              style={{
+                background: themeTab === m ? 'var(--surface-strong)' : 'transparent',
+                color: themeTab === m ? 'var(--ink)' : 'var(--subtle)',
+                border: themeTab === m ? '1px solid var(--border)' : '1px solid transparent',
+              }}
+            >
+              {m === 'dark' ? '🌙 Dark Mode' : '☀️ Light Mode'}
+            </button>
+          ))}
+        </div>
+
+        {themeTab === 'dark' ? (
+          <ThemeEditor
+            label="Dark Mode"
+            theme={config.darkTheme}
+            defaults={DEFAULT_DARK}
+            onChange={t => setConfig(c => ({ ...c, darkTheme: t }))}
+          />
+        ) : (
+          <ThemeEditor
+            label="Light Mode"
+            theme={config.lightTheme}
+            defaults={DEFAULT_LIGHT}
+            onChange={t => setConfig(c => ({ ...c, lightTheme: t }))}
+          />
+        )}
+      </div>
+
+      {/* Custom CSS */}
+      <div className="rounded-xl p-5 space-y-3" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+        <h2 className="text-sm font-semibold" style={{ color: 'var(--ink)' }}>Custom CSS</h2>
+        <p className="text-xs" style={{ color: 'var(--subtle)' }}>Injected into the page after all theme variables — overrides anything.</p>
         <textarea
           value={config.customCss}
           onChange={e => setConfig(c => ({ ...c, customCss: e.target.value }))}
           placeholder="/* Custom CSS overrides */"
-          rows={4}
+          rows={5}
           className={inputCls}
           style={{ resize: 'vertical', fontFamily: 'monospace', fontSize: '12px' }}
         />
-      </Field>
-
-      <Field label="Footer Text">
-        <input value={config.footerText} onChange={e => setConfig(c => ({ ...c, footerText: e.target.value }))} className={inputCls} />
-      </Field>
-
-      <div className="grid grid-cols-3 gap-3">
-        <Field label="Twitter"><input value={config.twitterUrl} onChange={e => setConfig(c => ({ ...c, twitterUrl: e.target.value }))} placeholder="https://..." className={inputCls} /></Field>
-        <Field label="Discord"><input value={config.discordUrl} onChange={e => setConfig(c => ({ ...c, discordUrl: e.target.value }))} placeholder="https://..." className={inputCls} /></Field>
-        <Field label="GitHub"><input value={config.githubUrl} onChange={e => setConfig(c => ({ ...c, githubUrl: e.target.value }))} placeholder="https://..." className={inputCls} /></Field>
       </div>
 
-      <button onClick={handleSave} className="w-full py-3 rounded-lg text-sm font-semibold flex items-center justify-center gap-2" style={{ background: 'var(--accent)', color: '#0d1b2f' }}>
+      <button onClick={handleSave} className="w-full py-3 rounded-lg text-sm font-semibold flex items-center justify-center gap-2" style={{ background: 'var(--accent)', color: 'var(--accent-text)' }}>
         <Save size={14} /> Save Branding
       </button>
     </div>

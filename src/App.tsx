@@ -5,7 +5,7 @@ import MarketList from './pages/MarketList'
 import MarketDetail from './pages/MarketDetail'
 import Portfolio from './pages/Portfolio'
 import AdminPanel from './pages/AdminPanel'
-import { loadConfig, applyCssVars } from './lib/adminConfig'
+import { loadConfig, applyThemeVars } from './lib/adminConfig'
 import { applyTheme } from './lib/theme'
 import { TrendingUp } from 'lucide-react'
 
@@ -15,7 +15,7 @@ export default function App() {
     applyTheme()
     // Apply admin-configured CSS variables
     const config = loadConfig()
-    applyCssVars(config)
+    applyThemeVars(config)
     document.title = config.siteName || 'Predarc'
   }, [])
 

@@ -1,17 +1,41 @@
 // Admin-configurable site settings
-// Stored in localStorage; in production, load from your backend/CMS
+// Stored in localStorage; in production, back this with a signed server call.
 export const ADMIN_CONFIG_KEY = 'predarc_admin_config'
 
+// Per-mode theme token set
+export interface ThemeColors {
+  bg: string
+  surface: string
+  surfaceMuted: string
+  ink: string
+  muted: string
+  accent: string
+  border: string
+  success: string
+  danger: string
+  warning: string
+}
+
 export interface SiteConfig {
+  // Identity
   siteName: string
   tagline: string
-  logoUrl: string          // URL or base64 data URL
-  primaryColor: string     // hex
-  accentColor: string      // hex
-  bgColor: string          // hex
-  surfaceColor: string     // hex
-  inkColor: string         // hex
-  borderColor: string      // hex
+  logoUrl: string
+
+  // Theme tokens per mode
+  darkTheme: ThemeColors
+  lightTheme: ThemeColors
+
+  // Custom CSS applied on top
+  customCss: string
+
+  // Footer / social
+  footerText: string
+  twitterUrl: string
+  discordUrl: string
+  githubUrl: string
+
+  // Onchain config
   contractAddress: string
   rpcUrl: string
   chainId: number
@@ -21,23 +45,45 @@ export interface SiteConfig {
   adminWallet: string
   chainlinkBtcFeed: string
   chainlinkEthFeed: string
-  customCss: string
-  footerText: string
-  twitterUrl: string
-  discordUrl: string
-  githubUrl: string
+}
+
+export const DEFAULT_DARK: ThemeColors = {
+  bg:          '#0a1628',
+  surface:     'rgba(255,255,255,0.06)',
+  surfaceMuted:'#152035',
+  ink:         '#f0f6ff',
+  muted:       '#7fa3c8',
+  accent:      '#5b9cf6',
+  border:      'rgba(255,255,255,0.09)',
+  success:     '#34d399',
+  danger:      '#f87171',
+  warning:     '#fbbf24',
+}
+
+export const DEFAULT_LIGHT: ThemeColors = {
+  bg:          '#ffffff',
+  surface:     '#ffffff',
+  surfaceMuted:'#eef2fa',
+  ink:         '#0d1829',
+  muted:       '#3d5470',
+  accent:      '#2563eb',
+  border:      '#d0dcea',
+  success:     '#059669',
+  danger:      '#dc2626',
+  warning:     '#b45309',
 }
 
 export const DEFAULT_CONFIG: SiteConfig = {
   siteName: 'Predarc',
   tagline: 'Predict. Trade. Win.',
   logoUrl: '',
-  primaryColor: '#acc6e9',
-  accentColor: '#acc6e9',
-  bgColor: '#0d1b2f',
-  surfaceColor: 'rgba(255,255,255,0.07)',
-  inkColor: '#f9faf3',
-  borderColor: 'rgba(255,255,255,0.12)',
+  darkTheme: DEFAULT_DARK,
+  lightTheme: DEFAULT_LIGHT,
+  customCss: '',
+  footerText: 'Powered by Arc. Built with Circle USDC.',
+  twitterUrl: '',
+  discordUrl: '',
+  githubUrl: '',
   contractAddress: '0xa78c2aa7a9ccff28ba42e59ae0a8c86f0da4e275',
   rpcUrl: 'https://rpc.mainnet.arc.io',
   chainId: 5042,
@@ -47,11 +93,6 @@ export const DEFAULT_CONFIG: SiteConfig = {
   adminWallet: '',
   chainlinkBtcFeed: '',
   chainlinkEthFeed: '',
-  customCss: '',
-  footerText: 'Powered by Arc. Built with Circle USDC.',
-  twitterUrl: '',
-  discordUrl: '',
-  githubUrl: '',
 }
 
 export function loadConfig(): SiteConfig {
@@ -60,7 +101,12 @@ export function loadConfig(): SiteConfig {
     if (!raw) return DEFAULT_CONFIG
     // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
     const parsed = JSON.parse(raw)
-    return { ...DEFAULT_CONFIG, ...(parsed as Partial<SiteConfig>) }
+    return {
+      ...DEFAULT_CONFIG,
+      ...(parsed as Partial<SiteConfig>),
+      darkTheme:  { ...DEFAULT_DARK,  ...((parsed as Partial<SiteConfig>).darkTheme  ?? {}) },
+      lightTheme: { ...DEFAULT_LIGHT, ...((parsed as Partial<SiteConfig>).lightTheme ?? {}) },
+    }
   } catch {
     return DEFAULT_CONFIG
   }
@@ -68,24 +114,54 @@ export function loadConfig(): SiteConfig {
 
 export function saveConfig(config: SiteConfig): void {
   localStorage.setItem(ADMIN_CONFIG_KEY, JSON.stringify(config))
-  // Apply CSS variables live
-  applyCssVars(config)
+  applyThemeVars(config)
 }
 
-export function applyCssVars(config: SiteConfig): void {
-  const root = document.documentElement
-  root.style.setProperty('--bg', config.bgColor)
-  root.style.setProperty('--accent', config.primaryColor)
-  root.style.setProperty('--accent-hover', config.accentColor)
-  root.style.setProperty('--ink', config.inkColor)
-  root.style.setProperty('--border', config.borderColor)
-  if (config.customCss) {
-    let styleEl = document.getElementById('predarc-custom-css')
-    if (!styleEl) {
-      styleEl = document.createElement('style')
-      styleEl.id = 'predarc-custom-css'
-      document.head.appendChild(styleEl)
+// Apply the right set of CSS vars based on current theme mode
+export function applyThemeVars(config: SiteConfig): void {
+  const isDark = document.documentElement.getAttribute('data-theme') !== 'light'
+  const t = isDark ? config.darkTheme : config.lightTheme
+  applyColorSet(t)
+  applyCustomCss(config.customCss)
+}
+
+// Called on theme mode toggle so stored colors re-apply to the new mode
+export function reapplyThemeVars(): void {
+  const raw = localStorage.getItem(ADMIN_CONFIG_KEY)
+  if (!raw) return
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+    const parsed = JSON.parse(raw)
+    const config: SiteConfig = {
+      ...DEFAULT_CONFIG,
+      ...(parsed as Partial<SiteConfig>),
+      darkTheme:  { ...DEFAULT_DARK,  ...((parsed as Partial<SiteConfig>).darkTheme  ?? {}) },
+      lightTheme: { ...DEFAULT_LIGHT, ...((parsed as Partial<SiteConfig>).lightTheme ?? {}) },
     }
-    styleEl.textContent = config.customCss
+    applyThemeVars(config)
+  } catch { /* ignore */ }
+}
+
+function applyColorSet(t: ThemeColors): void {
+  const r = document.documentElement
+  r.style.setProperty('--bg',            t.bg)
+  r.style.setProperty('--surface',       t.surface)
+  r.style.setProperty('--surface-muted', t.surfaceMuted)
+  r.style.setProperty('--ink',           t.ink)
+  r.style.setProperty('--muted',         t.muted)
+  r.style.setProperty('--accent',        t.accent)
+  r.style.setProperty('--border',        t.border)
+  r.style.setProperty('--success',       t.success)
+  r.style.setProperty('--danger',        t.danger)
+  r.style.setProperty('--warning',       t.warning)
+}
+
+function applyCustomCss(css: string): void {
+  let el = document.getElementById('predarc-custom-css')
+  if (!el) {
+    el = document.createElement('style')
+    el.id = 'predarc-custom-css'
+    document.head.appendChild(el)
   }
+  el.textContent = css
 }

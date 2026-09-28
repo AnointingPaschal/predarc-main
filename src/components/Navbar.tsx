@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { ConnectKitButton } from 'connectkit'
 import { Link, useLocation } from 'react-router-dom'
 import { BarChart2, Shield, Sun, Moon, Menu, X, TrendingUp, Briefcase } from 'lucide-react'
-import { loadConfig } from '../lib/adminConfig'
+import { loadConfig, reapplyThemeVars } from '../lib/adminConfig'
 import { getTheme, toggleTheme, type Theme } from '../lib/theme'
 
 export default function Navbar() {
@@ -17,6 +17,8 @@ export default function Navbar() {
   function handleToggleTheme() {
     const next = toggleTheme()
     setThemeState(next)
+    // Re-apply admin-configured colors for the new mode
+    reapplyThemeVars()
   }
 
   // Close mobile menu on route change — check mobileOpen first to avoid unnecessary re-renders

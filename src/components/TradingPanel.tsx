@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useAccount, useSwitchChain } from 'wagmi'
-import { arcTestnet } from 'viem/chains'
+import { arc } from 'viem/chains'
 import { toast } from 'sonner'
 
 import { Market, MarketStatus, formatUsdc, parseUsdc } from '../lib/contract'
@@ -18,7 +18,7 @@ type Tab = 'buy' | 'sell'
 export default function TradingPanel({ market, onSuccess }: Props) {
   const { address, chainId } = useAccount()
   const { switchChain } = useSwitchChain()
-  const isWrongChain = chainId !== arcTestnet.id
+  const isWrongChain = chainId !== arc.id
 
   const [tab, setTab] = useState<Tab>('buy')
   const [selectedOutcome, setSelectedOutcome] = useState(0)
@@ -80,7 +80,7 @@ export default function TradingPanel({ market, onSuccess }: Props) {
 
   const handleTrade = () => {
     if (!address) return toast.error('Connect your wallet first.')
-    if (isWrongChain) { switchChain({ chainId: arcTestnet.id }); return }
+    if (isWrongChain) { switchChain({ chainId: arc.id }); return }
     if (tradingClosed) return toast.error('Market is closed for trading.')
     if (parsedAmount === 0n) return toast.error('Enter an amount.')
 
@@ -225,11 +225,11 @@ export default function TradingPanel({ market, onSuccess }: Props) {
           <p className="text-center text-xs py-2" style={{ color: 'var(--subtle)' }}>Connect wallet to trade</p>
         ) : isWrongChain ? (
           <button
-            onClick={() => switchChain({ chainId: arcTestnet.id })}
+            onClick={() => switchChain({ chainId: arc.id })}
             className="w-full py-3 rounded-lg text-sm font-semibold"
             style={{ background: 'var(--danger)', color: '#fff' }}
           >
-            Switch to Arc Testnet
+            Switch to Arc Mainnet
           </button>
         ) : (
           <button

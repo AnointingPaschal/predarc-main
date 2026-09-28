@@ -150,7 +150,7 @@ export default function MarketDetail() {
             <InfoRow label="Pool" value={`$${formatUsdc(market.totalLiquidity)}`} />
             <InfoRow label="Fees collected" value={`$${formatUsdc(market.feesCollected)}`} />
             <a
-              href={`https://explorer.testnet.arc.io/address/${market.creator}`}
+              href={`https://explorer.arc.io/address/${market.creator}`}
               target="_blank"
               rel="noopener noreferrer"
               className="flex items-center gap-1 text-xs transition-opacity hover:opacity-70"

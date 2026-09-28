@@ -1,9 +1,9 @@
 import { useReadContract } from 'wagmi'
 import { erc20Abi } from 'viem'
-import { arcTestnet } from 'viem/chains'
+import { arc } from 'viem/chains'
 import { PREDARC_ADDRESS, PREDARC_ABI, USDC_ADDRESS } from '../lib/contract'
 
-const CHAIN_ID = arcTestnet.id
+const CHAIN_ID = arc.id
 
 export function useAllMarkets() {
   return useReadContract({

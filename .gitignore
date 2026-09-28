@@ -6,7 +6,7 @@ dist/
 contracts/out/
 contracts/cache/
 contracts/contract-metadata/
-lib/
+/lib/
 *.log
 console.jsonl
 traces.jsonl

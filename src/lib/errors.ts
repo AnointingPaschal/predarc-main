@@ -1,0 +1,15 @@
+export function parseOnchainError(error: unknown): string {
+  const msg = (error as { message?: string })?.message?.toLowerCase() ?? ''
+  if (msg.includes('user rejected') || msg.includes('denied')) return 'Transaction cancelled.'
+  if (msg.includes('insufficient funds') || msg.includes('exceeds balance')) return 'Insufficient USDC balance.'
+  if (msg.includes('slippageexceeded')) return 'Price moved too much. Try a smaller amount.'
+  if (msg.includes('tradingclosed')) return 'This market has closed for trading.'
+  if (msg.includes('invalidstatus')) return 'Market is not in the right state for this action.'
+  if (msg.includes('insufficientshares')) return 'You do not have enough shares to sell.'
+  if (msg.includes('notresolvable')) return 'Market is not ready to resolve yet.'
+  if (msg.includes('alreadyredeemed')) return 'You have already redeemed your winnings.'
+  if (msg.includes('nothingtoredeemed') || msg.includes('nothingtoredeem')) return 'Nothing to redeem for this market.'
+  if (msg.includes('reverted')) return 'Transaction failed. Please check your inputs and try again.'
+  if (msg.includes('network') || msg.includes('timeout')) return 'Network error. Please try again.'
+  return 'Something went wrong. Please try again.'
+}

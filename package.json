@@ -11,6 +11,7 @@
     "lint": "oxlint --type-aware src scripts --fix; s=$?; oxlint --fix .; exit $((s>0?s:$?))",
     "typecheck": "tsc --noEmit",
     "check": "bash scripts/check.sh",
+    "build": "vite build",
     "contracts:build": "forge build",
     "contracts:test": "forge test"
   },

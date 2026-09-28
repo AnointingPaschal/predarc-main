@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+contracts/out/
+contracts/cache/
+contracts/contract-metadata/
+lib/
+*.log
+console.jsonl
+traces.jsonl
+predarc-main/

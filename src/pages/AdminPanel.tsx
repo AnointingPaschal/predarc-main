@@ -1,0 +1,587 @@
+import { useState, useRef, useEffect } from 'react'
+import { useAccount } from 'wagmi'
+import { ConnectKitButton } from 'connectkit'
+import { toast } from 'sonner'
+import { Shield, Plus, Settings, DollarSign, BarChart2, Palette, Globe, Save, Upload, RefreshCw } from 'lucide-react'
+import { useAllMarkets, usePlatformFee, useFeeRecipient, useAccruedFees } from '../hooks/useMarkets'
+import {
+  useCreateMarket, useResolveMarket, useResolveScalarMarket,
+  useCancelMarket, useCloseMarket, useFeatureMarket, useSetFee, useWithdrawFees
+} from '../hooks/useEscrow'
+import { useApproveUsdc } from '../hooks/useEscrow'
+import { Market, MarketStatus, MarketType, formatUsdc, parseUsdc, CATEGORIES } from '../lib/contract'
+import { loadConfig, saveConfig, DEFAULT_CONFIG, SiteConfig } from '../lib/adminConfig'
+import { parseOnchainError } from '../lib/errors'
+
+type Tab = 'markets' | 'create' | 'fees' | 'branding' | 'config'
+
+export default function AdminPanel() {
+  const { address } = useAccount()
+  const [tab, setTab] = useState<Tab>('markets')
+
+  if (!address) {
+    return (
+      <div className="max-w-xl mx-auto px-4 py-16 text-center">
+        <Shield size={40} className="mx-auto mb-4 opacity-30" style={{ color: 'var(--muted)' }} />
+        <h1 className="display text-2xl font-600 mb-2" style={{ color: 'var(--ink)' }}>Admin Panel</h1>
+        <p className="text-sm mb-6" style={{ color: 'var(--subtle)' }}>Connect your wallet to access admin controls.</p>
+        <ConnectKitButton />
+      </div>
+    )
+  }
+
+  const tabs: { id: Tab; label: string; icon: React.ReactNode }[] = [
+    { id: 'markets', label: 'Markets', icon: <BarChart2 size={14} /> },
+    { id: 'create', label: 'Create', icon: <Plus size={14} /> },
+    { id: 'fees', label: 'Fees', icon: <DollarSign size={14} /> },
+    { id: 'branding', label: 'Branding', icon: <Palette size={14} /> },
+    { id: 'config', label: 'Config', icon: <Settings size={14} /> },
+  ]
+
+  return (
+    <div className="max-w-5xl mx-auto px-4 sm:px-6 py-8">
+      <div className="flex items-center gap-3 mb-6">
+        <Shield size={20} style={{ color: 'var(--accent)' }} />
+        <h1 className="display text-2xl font-700" style={{ color: 'var(--ink)' }}>Admin Panel</h1>
+      </div>
+
+      {/* Tabs */}
+      <div className="flex gap-1 rounded-xl p-1 mb-6" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+        {tabs.map(t => (
+          <button
+            key={t.id}
+            onClick={() => setTab(t.id)}
+            className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-medium transition-colors"
+            style={{
+              background: tab === t.id ? 'var(--surface-strong)' : 'transparent',
+              color: tab === t.id ? 'var(--ink)' : 'var(--subtle)',
+            }}
+          >
+            {t.icon}
+            <span className="hidden sm:inline">{t.label}</span>
+          </button>
+        ))}
+      </div>
+
+      {tab === 'markets' && <MarketsTab />}
+      {tab === 'create' && <CreateTab />}
+      {tab === 'fees' && <FeesTab />}
+      {tab === 'branding' && <BrandingTab />}
+      {tab === 'config' && <ConfigTab />}
+    </div>
+  )
+}
+
+function MarketsTab() {
+  const { data: raw, refetch } = useAllMarkets()
+  const markets = raw as Market[] | undefined
+  const featureMarket = useFeatureMarket()
+  const cancelMarket = useCancelMarket()
+  const closeMarket = useCloseMarket()
+  const resolveMarket = useResolveMarket()
+  const resolveScalar = useResolveScalarMarket()
+  const [resolveInputs, setResolveInputs] = useState<Record<string, string>>({})
+
+  useEffect(() => {
+    if (featureMarket.isSuccess || cancelMarket.isSuccess || closeMarket.isSuccess || resolveMarket.isSuccess || resolveScalar.isSuccess) {
+      void refetch()
+      toast.success('Market updated.')
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [featureMarket.isSuccess, cancelMarket.isSuccess, closeMarket.isSuccess, resolveMarket.isSuccess, resolveScalar.isSuccess])
+
+  useEffect(() => {
+    const err = featureMarket.error || cancelMarket.error || closeMarket.error || resolveMarket.error || resolveScalar.error
+    if (err) toast.error(parseOnchainError(err))
+  }, [featureMarket.error, cancelMarket.error, closeMarket.error, resolveMarket.error, resolveScalar.error])
+
+  return (
+    <div className="space-y-3">
+      <p className="text-sm" style={{ color: 'var(--muted)' }}>{markets?.length ?? 0} total markets</p>
+      {markets?.map(m => (
+        <div key={m.id.toString()} className="rounded-xl p-4" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+          <div className="flex items-start justify-between gap-2 mb-2">
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-medium truncate" style={{ color: 'var(--ink-2)' }}>{m.question}</p>
+              <p className="text-xs mt-0.5" style={{ color: 'var(--subtle)' }}>
+                #{m.id.toString()} · {m.category} · {MarketType[m.marketType]} · ${formatUsdc(m.totalLiquidity)} pool
+              </p>
+            </div>
+            <span className={`text-xs flex-shrink-0 font-medium ${m.status === MarketStatus.Open ? 'text-green-400' : m.status === MarketStatus.Resolved ? 'text-blue-400' : 'text-yellow-400'}`}>
+              {MarketStatus[m.status]}
+            </span>
+          </div>
+
+          <div className="flex flex-wrap gap-2 mt-3">
+            {m.status === MarketStatus.Open && (
+              <>
+                <AdminBtn onClick={() => closeMarket.close(m.id)} loading={closeMarket.isPending}>Close</AdminBtn>
+                <AdminBtn onClick={() => featureMarket.feature(m.id, !m.featured)} loading={featureMarket.isPending}>
+                  {m.featured ? 'Unfeature' : 'Feature'}
+                </AdminBtn>
+                <AdminBtn onClick={() => cancelMarket.cancel(m.id)} loading={cancelMarket.isPending} danger>Cancel</AdminBtn>
+              </>
+            )}
+            {(m.status === MarketStatus.Open || m.status === MarketStatus.Closed) && (
+              <div className="flex items-center gap-2 w-full mt-1">
+                {m.marketType !== MarketType.Scalar ? (
+                  <>
+                    <select
+                      value={resolveInputs[m.id.toString()] ?? ''}
+                      onChange={e => setResolveInputs(prev => ({ ...prev, [m.id.toString()]: e.target.value }))}
+                      className="flex-1 px-2 py-1.5 rounded-lg text-xs outline-none"
+                      style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)', color: 'var(--ink)' }}
+                    >
+                      <option value="">Select winner</option>
+                      {m.outcomes.map((o, i) => <option key={i} value={i}>{o}</option>)}
+                    </select>
+                    <AdminBtn
+                      onClick={() => {
+                        const v = resolveInputs[m.id.toString()]
+                        if (v === '' || v === undefined) return toast.error('Select a winner first.')
+                        resolveMarket.resolve(m.id, BigInt(v))
+                      }}
+                      loading={resolveMarket.isPending}
+                    >
+                      Resolve
+                    </AdminBtn>
+                  </>
+                ) : (
+                  <>
+                    <input
+                      type="number"
+                      placeholder="Resolved value"
+                      value={resolveInputs[m.id.toString()] ?? ''}
+                      onChange={e => setResolveInputs(prev => ({ ...prev, [m.id.toString()]: e.target.value }))}
+                      className="flex-1 px-2 py-1.5 rounded-lg text-xs outline-none"
+                      style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)', color: 'var(--ink)' }}
+                    />
+                    <AdminBtn
+                      onClick={() => {
+                        const v = resolveInputs[m.id.toString()]
+                        if (!v) return toast.error('Enter a value.')
+                        resolveScalar.resolveScalar(m.id, BigInt(Math.round(parseFloat(v))))
+                      }}
+                      loading={resolveScalar.isPending}
+                    >
+                      Resolve Scalar
+                    </AdminBtn>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function CreateTab() {
+  const approve = useApproveUsdc()
+  const create = useCreateMarket()
+  const [form, setForm] = useState({
+    marketType: '0',
+    question: '',
+    outcomes: ['Yes', 'No'],
+    endTime: '',
+    resolutionTime: '',
+    scalarLow: '0',
+    scalarHigh: '100',
+    category: 'Crypto',
+    imageUrl: '',
+    initialLiquidity: '100',
+  })
+
+  useEffect(() => {
+    if (create.isSuccess) {
+      toast.success('Market created!')
+    }
+    if (create.error) toast.error(parseOnchainError(create.error))
+    if (approve.error) toast.error(parseOnchainError(approve.error))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [create.isSuccess, create.error, approve.error])
+
+  const setOutcome = (i: number, val: string) => {
+    setForm(f => {
+      const outcomes = [...f.outcomes]
+      outcomes[i] = val
+      return { ...f, outcomes }
+    })
+  }
+
+  const addOutcome = () => {
+    if (form.outcomes.length >= 10) return
+    setForm(f => ({ ...f, outcomes: [...f.outcomes, `Option ${f.outcomes.length + 1}`] }))
+  }
+
+  const removeOutcome = (i: number) => {
+    if (form.outcomes.length <= 2) return
+    setForm(f => ({ ...f, outcomes: f.outcomes.filter((_, idx) => idx !== i) }))
+  }
+
+  const handleCreate = () => {
+    if (!form.question.trim()) return toast.error('Question is required.')
+    if (!form.endTime || !form.resolutionTime) return toast.error('Dates are required.')
+
+    const endTs = BigInt(Math.floor(new Date(form.endTime).getTime() / 1000))
+    const resTs = BigInt(Math.floor(new Date(form.resolutionTime).getTime() / 1000))
+    const liquidity = parseUsdc(form.initialLiquidity)
+
+    // Approve first
+    approve.approve(liquidity * 2n)
+
+    setTimeout(() => {
+      create.create(
+        parseInt(form.marketType),
+        form.question,
+        form.outcomes,
+        endTs,
+        resTs,
+        BigInt(parseInt(form.scalarLow)),
+        BigInt(parseInt(form.scalarHigh)),
+        form.category,
+        form.imageUrl,
+        liquidity,
+      )
+    }, 3000) // wait for approve confirmation
+  }
+
+  const isLoading = approve.isPending || approve.isConfirming || create.isPending || create.isConfirming
+
+  return (
+    <div className="rounded-xl p-5 space-y-4" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+      <h2 className="text-sm font-semibold" style={{ color: 'var(--ink)' }}>Create New Market</h2>
+
+      <Field label="Market Type">
+        <select value={form.marketType} onChange={e => setForm(f => ({ ...f, marketType: e.target.value, outcomes: e.target.value === '0' ? ['Yes', 'No'] : f.outcomes }))} className={selectCls}>
+          <option value="0">Binary (Yes/No)</option>
+          <option value="1">Multiple Choice</option>
+          <option value="2">Scalar (Numeric Range)</option>
+        </select>
+      </Field>
+
+      <Field label="Question">
+        <input value={form.question} onChange={e => setForm(f => ({ ...f, question: e.target.value }))} placeholder="Will ETH exceed $5,000 by end of 2025?" className={inputCls} />
+      </Field>
+
+      <Field label="Category">
+        <select value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value }))} className={selectCls}>
+          {CATEGORIES.filter(c => c !== 'All').map(c => <option key={c}>{c}</option>)}
+        </select>
+      </Field>
+
+      {form.marketType !== '2' ? (
+        <Field label="Outcomes">
+          <div className="space-y-2">
+            {form.outcomes.map((o, i) => (
+              <div key={i} className="flex gap-2">
+                <input value={o} onChange={e => setOutcome(i, e.target.value)} className={inputCls + ' flex-1'} />
+                {form.outcomes.length > 2 && (
+                  <button onClick={() => removeOutcome(i)} className="px-2 py-1.5 rounded text-xs" style={{ background: 'var(--danger)', color: '#fff' }}>×</button>
+                )}
+              </div>
+            ))}
+            {form.marketType === '1' && form.outcomes.length < 10 && (
+              <button onClick={addOutcome} className="text-xs px-3 py-1.5 rounded-lg" style={{ background: 'var(--surface-strong)', color: 'var(--accent)' }}>+ Add Option</button>
+            )}
+          </div>
+        </Field>
+      ) : (
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Scalar Low">
+            <input type="number" value={form.scalarLow} onChange={e => setForm(f => ({ ...f, scalarLow: e.target.value }))} className={inputCls} />
+          </Field>
+          <Field label="Scalar High">
+            <input type="number" value={form.scalarHigh} onChange={e => setForm(f => ({ ...f, scalarHigh: e.target.value }))} className={inputCls} />
+          </Field>
+        </div>
+      )}
+
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="Trading Ends">
+          <input type="datetime-local" value={form.endTime} onChange={e => setForm(f => ({ ...f, endTime: e.target.value }))} className={inputCls} />
+        </Field>
+        <Field label="Resolution After">
+          <input type="datetime-local" value={form.resolutionTime} onChange={e => setForm(f => ({ ...f, resolutionTime: e.target.value }))} className={inputCls} />
+        </Field>
+      </div>
+
+      <Field label="Initial Liquidity (USDC)">
+        <input type="number" value={form.initialLiquidity} onChange={e => setForm(f => ({ ...f, initialLiquidity: e.target.value }))} className={inputCls} />
+      </Field>
+
+      <Field label="Image URL (optional)">
+        <input value={form.imageUrl} onChange={e => setForm(f => ({ ...f, imageUrl: e.target.value }))} placeholder="https://..." className={inputCls} />
+      </Field>
+
+      <button
+        onClick={handleCreate}
+        disabled={isLoading}
+        className="w-full py-3 rounded-lg text-sm font-semibold disabled:opacity-50"
+        style={{ background: 'var(--accent)', color: '#0d1b2f' }}
+      >
+        {isLoading ? 'Creating...' : 'Create Market'}
+      </button>
+    </div>
+  )
+}
+
+function FeesTab() {
+  const { data: feeBps, refetch: refetchFee } = usePlatformFee()
+  const { data: feeAddr } = useFeeRecipient()
+  const { data: accrued, refetch: refetchAccrued } = useAccruedFees()
+  const setFee = useSetFee()
+  const withdraw = useWithdrawFees()
+  const [newFee, setNewFee] = useState('')
+
+  useEffect(() => {
+    if (setFee.isSuccess) { toast.success('Fee updated.'); void refetchFee() }
+    if (withdraw.isSuccess) { toast.success('Fees withdrawn.'); void refetchAccrued() }
+    if (setFee.error) toast.error(parseOnchainError(setFee.error))
+    if (withdraw.error) toast.error(parseOnchainError(withdraw.error))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [setFee.isSuccess, withdraw.isSuccess, setFee.error, withdraw.error])
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-xl p-5" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+        <h2 className="text-sm font-semibold mb-4" style={{ color: 'var(--ink)' }}>Fee Settings</h2>
+        <div className="space-y-3">
+          <div className="flex justify-between text-sm">
+            <span style={{ color: 'var(--subtle)' }}>Current fee</span>
+            <span className="tabular-nums font-medium" style={{ color: 'var(--accent)' }}>{feeBps !== undefined ? Number(feeBps) / 100 : '—'}%</span>
+          </div>
+          <div className="flex justify-between text-sm">
+            <span style={{ color: 'var(--subtle)' }}>Fee recipient</span>
+            <span className="mono text-xs" style={{ color: 'var(--muted)' }}>{feeAddr ? (feeAddr as string).slice(0, 8) + '...' : '—'}</span>
+          </div>
+          <div className="flex justify-between text-sm">
+            <span style={{ color: 'var(--subtle)' }}>Accrued fees</span>
+            <span className="tabular-nums font-medium" style={{ color: 'var(--success)' }}>${accrued !== undefined ? formatUsdc(accrued as bigint) : '—'}</span>
+          </div>
+        </div>
+      </div>
+
+      <div className="rounded-xl p-5" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+        <h3 className="text-sm font-semibold mb-3" style={{ color: 'var(--ink)' }}>Update Fee (max 5%)</h3>
+        <div className="flex gap-2">
+          <input
+            type="number"
+            min="0"
+            max="500"
+            step="1"
+            placeholder="200 = 2%"
+            value={newFee}
+            onChange={e => setNewFee(e.target.value)}
+            className={inputCls + ' flex-1'}
+          />
+          <button
+            onClick={() => { if (!newFee) return; setFee.setFee(BigInt(parseInt(newFee))) }}
+            disabled={setFee.isPending || setFee.isConfirming}
+            className="px-4 py-2 rounded-lg text-sm font-semibold disabled:opacity-50"
+            style={{ background: 'var(--accent)', color: '#0d1b2f' }}
+          >
+            {setFee.isPending || setFee.isConfirming ? 'Saving...' : 'Update'}
+          </button>
+        </div>
+      </div>
+
+      <button
+        onClick={() => withdraw.withdraw()}
+        disabled={withdraw.isPending || withdraw.isConfirming}
+        className="w-full py-3 rounded-lg text-sm font-semibold disabled:opacity-50"
+        style={{ background: 'var(--success)', color: '#0d1b2f' }}
+      >
+        {withdraw.isPending || withdraw.isConfirming ? 'Withdrawing...' : `Withdraw $${accrued !== undefined ? formatUsdc(accrued as bigint) : '0.00'} Fees`}
+      </button>
+    </div>
+  )
+}
+
+function BrandingTab() {
+  const [config, setConfig] = useState<SiteConfig>(loadConfig)
+  const fileRef = useRef<HTMLInputElement>(null)
+
+  const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = ev => setConfig(c => ({ ...c, logoUrl: ev.target?.result as string ?? '' }))
+    reader.readAsDataURL(file)
+  }
+
+  const handleSave = () => {
+    saveConfig(config)
+    toast.success('Branding saved and applied!')
+  }
+
+  return (
+    <div className="rounded-xl p-5 space-y-4" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+      <h2 className="text-sm font-semibold" style={{ color: 'var(--ink)' }}>Branding</h2>
+
+      <Field label="Site Name">
+        <input value={config.siteName} onChange={e => setConfig(c => ({ ...c, siteName: e.target.value }))} className={inputCls} />
+      </Field>
+      <Field label="Tagline">
+        <input value={config.tagline} onChange={e => setConfig(c => ({ ...c, tagline: e.target.value }))} className={inputCls} />
+      </Field>
+
+      <Field label="Logo">
+        <div className="flex items-center gap-3">
+          {config.logoUrl && <img src={config.logoUrl} alt="Logo" className="h-10 w-10 object-contain rounded" />}
+          <button
+            onClick={() => fileRef.current?.click()}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs"
+            style={{ background: 'var(--surface-strong)', color: 'var(--muted)', border: '1px solid var(--border)' }}
+          >
+            <Upload size={12} /> Upload Logo
+          </button>
+          <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={handleLogoUpload} />
+        </div>
+      </Field>
+
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="Primary Color">
+          <div className="flex gap-2 items-center">
+            <input type="color" value={config.primaryColor} onChange={e => setConfig(c => ({ ...c, primaryColor: e.target.value }))} className="h-9 w-12 rounded cursor-pointer border-0 bg-transparent" />
+            <input value={config.primaryColor} onChange={e => setConfig(c => ({ ...c, primaryColor: e.target.value }))} className={inputCls + ' flex-1'} />
+          </div>
+        </Field>
+        <Field label="Background Color">
+          <div className="flex gap-2 items-center">
+            <input type="color" value={config.bgColor} onChange={e => setConfig(c => ({ ...c, bgColor: e.target.value }))} className="h-9 w-12 rounded cursor-pointer border-0 bg-transparent" />
+            <input value={config.bgColor} onChange={e => setConfig(c => ({ ...c, bgColor: e.target.value }))} className={inputCls + ' flex-1'} />
+          </div>
+        </Field>
+        <Field label="Text Color">
+          <div className="flex gap-2 items-center">
+            <input type="color" value={config.inkColor} onChange={e => setConfig(c => ({ ...c, inkColor: e.target.value }))} className="h-9 w-12 rounded cursor-pointer border-0 bg-transparent" />
+            <input value={config.inkColor} onChange={e => setConfig(c => ({ ...c, inkColor: e.target.value }))} className={inputCls + ' flex-1'} />
+          </div>
+        </Field>
+        <Field label="Border Color">
+          <div className="flex gap-2 items-center">
+            <input type="color" value={config.borderColor} onChange={e => setConfig(c => ({ ...c, borderColor: e.target.value }))} className="h-9 w-12 rounded cursor-pointer border-0 bg-transparent" />
+            <input value={config.borderColor} onChange={e => setConfig(c => ({ ...c, borderColor: e.target.value }))} className={inputCls + ' flex-1'} />
+          </div>
+        </Field>
+      </div>
+
+      <Field label="Custom CSS">
+        <textarea
+          value={config.customCss}
+          onChange={e => setConfig(c => ({ ...c, customCss: e.target.value }))}
+          placeholder="/* Custom CSS overrides */"
+          rows={4}
+          className={inputCls}
+          style={{ resize: 'vertical', fontFamily: 'monospace', fontSize: '12px' }}
+        />
+      </Field>
+
+      <Field label="Footer Text">
+        <input value={config.footerText} onChange={e => setConfig(c => ({ ...c, footerText: e.target.value }))} className={inputCls} />
+      </Field>
+
+      <div className="grid grid-cols-3 gap-3">
+        <Field label="Twitter"><input value={config.twitterUrl} onChange={e => setConfig(c => ({ ...c, twitterUrl: e.target.value }))} placeholder="https://..." className={inputCls} /></Field>
+        <Field label="Discord"><input value={config.discordUrl} onChange={e => setConfig(c => ({ ...c, discordUrl: e.target.value }))} placeholder="https://..." className={inputCls} /></Field>
+        <Field label="GitHub"><input value={config.githubUrl} onChange={e => setConfig(c => ({ ...c, githubUrl: e.target.value }))} placeholder="https://..." className={inputCls} /></Field>
+      </div>
+
+      <button onClick={handleSave} className="w-full py-3 rounded-lg text-sm font-semibold flex items-center justify-center gap-2" style={{ background: 'var(--accent)', color: '#0d1b2f' }}>
+        <Save size={14} /> Save Branding
+      </button>
+    </div>
+  )
+}
+
+function ConfigTab() {
+  const [config, setConfig] = useState<SiteConfig>(loadConfig)
+
+  const handleSave = () => {
+    saveConfig(config)
+    toast.success('Config saved!')
+  }
+
+  return (
+    <div className="rounded-xl p-5 space-y-4" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+      <h2 className="text-sm font-semibold" style={{ color: 'var(--ink)' }}>Advanced Config</h2>
+      <p className="text-xs" style={{ color: 'var(--subtle)' }}>
+        These values are stored in your browser and used to configure the app. For production, set these via environment variables.
+      </p>
+
+      <Field label="Contract Address">
+        <input value={config.contractAddress} onChange={e => setConfig(c => ({ ...c, contractAddress: e.target.value }))} className={inputCls + ' mono'} />
+      </Field>
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="RPC URL">
+          <input value={config.rpcUrl} onChange={e => setConfig(c => ({ ...c, rpcUrl: e.target.value }))} className={inputCls} />
+        </Field>
+        <Field label="Chain ID">
+          <input type="number" value={config.chainId} onChange={e => setConfig(c => ({ ...c, chainId: parseInt(e.target.value) }))} className={inputCls + ' tabular-nums'} />
+        </Field>
+      </div>
+      <Field label="USDC Address">
+        <input value={config.usdcAddress} onChange={e => setConfig(c => ({ ...c, usdcAddress: e.target.value }))} className={inputCls + ' mono'} />
+      </Field>
+      <Field label="Admin Wallet">
+        <input value={config.adminWallet} onChange={e => setConfig(c => ({ ...c, adminWallet: e.target.value }))} placeholder="0x..." className={inputCls + ' mono'} />
+      </Field>
+      <Field label="Fee Recipient">
+        <input value={config.feeRecipient} onChange={e => setConfig(c => ({ ...c, feeRecipient: e.target.value }))} placeholder="0x..." className={inputCls + ' mono'} />
+      </Field>
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="Chainlink BTC/USD Feed">
+          <input value={config.chainlinkBtcFeed} onChange={e => setConfig(c => ({ ...c, chainlinkBtcFeed: e.target.value }))} placeholder="0x..." className={inputCls + ' mono'} />
+        </Field>
+        <Field label="Chainlink ETH/USD Feed">
+          <input value={config.chainlinkEthFeed} onChange={e => setConfig(c => ({ ...c, chainlinkEthFeed: e.target.value }))} placeholder="0x..." className={inputCls + ' mono'} />
+        </Field>
+      </div>
+
+      <button onClick={handleSave} className="w-full py-3 rounded-lg text-sm font-semibold flex items-center justify-center gap-2" style={{ background: 'var(--accent)', color: '#0d1b2f' }}>
+        <Save size={14} /> Save Config
+      </button>
+
+      <button
+        onClick={() => { localStorage.removeItem('predarc_admin_config'); setConfig(DEFAULT_CONFIG); toast.success('Reset to defaults.') }}
+        className="w-full py-2 rounded-lg text-xs flex items-center justify-center gap-1.5"
+        style={{ background: 'transparent', color: 'var(--danger)', border: '1px solid var(--border)' }}
+      >
+        <RefreshCw size={11} /> Reset to Defaults
+      </button>
+    </div>
+  )
+}
+
+// Shared components
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <label className="text-xs mb-1 block" style={{ color: 'var(--subtle)' }}>{label}</label>
+      {children}
+    </div>
+  )
+}
+
+function AdminBtn({ onClick, loading, danger, children }: { onClick: () => void; loading?: boolean; danger?: boolean; children: React.ReactNode }) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={loading}
+      className="px-3 py-1.5 rounded-lg text-xs font-medium disabled:opacity-50"
+      style={{
+        background: danger ? 'rgba(232,109,122,0.15)' : 'var(--surface-strong)',
+        color: danger ? 'var(--danger)' : 'var(--muted)',
+        border: '1px solid ' + (danger ? 'rgba(232,109,122,0.3)' : 'var(--border)'),
+      }}
+    >
+      {loading ? '...' : children}
+    </button>
+  )
+}
+
+const inputCls = 'w-full px-3 py-2 rounded-lg text-sm outline-none'
+  + ' bg-[var(--surface-muted)] border border-[var(--border)] text-[var(--ink)]'
+const selectCls = inputCls

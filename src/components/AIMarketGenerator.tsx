@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Sparkles, RefreshCw, ChevronDown, ChevronUp, Zap, Newspaper, List, Bot, Check, X } from 'lucide-react'
+import { Sparkles, RefreshCw, ChevronDown, ChevronUp, Zap, Newspaper, List, Bot, Check, X, Rocket } from 'lucide-react'
 import { toast } from 'sonner'
 import { generateMarkets, AIMarketDraft, AIGenerateMode, OPENROUTER_MODELS } from '../lib/aiMarkets'
 import { loadConfig } from '../lib/adminConfig'
@@ -7,6 +7,7 @@ import { CATEGORIES } from '../lib/contract'
 
 interface AIMarketGeneratorProps {
   onUseMarket: (draft: AIMarketDraft) => void
+  onPublishAll?: (drafts: AIMarketDraft[]) => Promise<void>
 }
 
 type MarketTypeFilter = 'binary' | 'multiple' | 'scalar'
@@ -21,7 +22,7 @@ const MODE_INFO = {
 const inputCls = 'w-full px-3 py-2.5 rounded-xl text-sm outline-none'
   + ' bg-[var(--surface-muted)] border border-[var(--border)] text-[var(--ink)] placeholder:text-[var(--subtle)]'
 
-export default function AIMarketGenerator({ onUseMarket }: AIMarketGeneratorProps) {
+export default function AIMarketGenerator({ onUseMarket, onPublishAll }: AIMarketGeneratorProps) {
   const [open, setOpen] = useState(false)
   const [mode, setMode] = useState<AIGenerateMode>('topic')
   const [topic, setTopic] = useState('')
@@ -30,6 +31,8 @@ export default function AIMarketGenerator({ onUseMarket }: AIMarketGeneratorProp
   const [selectedCategories, setSelectedCategories] = useState<string[]>(['Crypto', 'Sports', 'Politics'])
   const [selectedTypes, setSelectedTypes] = useState<MarketTypeFilter[]>(['binary', 'multiple', 'scalar'])
   const [loading, setLoading] = useState(false)
+  const [publishing, setPublishing] = useState(false)
+  const [publishProgress, setPublishProgress] = useState<{ done: number; total: number } | null>(null)
   const [drafts, setDrafts] = useState<AIMarketDraft[]>([])
   const [expandedIdx, setExpandedIdx] = useState<number | null>(null)
 
@@ -336,13 +339,48 @@ export default function AIMarketGenerator({ onUseMarket }: AIMarketGeneratorProp
               ))}
 
               {drafts.length > 1 && (
-                <button
-                  onClick={() => { drafts.forEach(d => onUseMarket(d)); toast.success('All markets loaded') }}
-                  className="w-full py-2 rounded-xl text-xs font-semibold"
-                  style={{ background: 'var(--surface-muted)', color: 'var(--accent)', border: '1px solid var(--border)' }}
-                >
-                  Use All {drafts.length} Markets
-                </button>
+                <div className="flex gap-2">
+                  {onPublishAll && (
+                    <button
+                      disabled={publishing}
+                      onClick={() => {
+                        if (!onPublishAll) return
+                        setPublishing(true)
+                        void (async () => {
+                        setPublishProgress({ done: 0, total: drafts.length })
+                        try {
+                          for (let i = 0; i < drafts.length; i++) {
+                            setPublishProgress({ done: i, total: drafts.length })
+                            await onPublishAll([drafts[i]])
+                            setPublishProgress({ done: i + 1, total: drafts.length })
+                          }
+                          toast.success(`All ${drafts.length} markets published onchain!`)
+                          setDrafts([])
+                          setPublishProgress(null)
+                        } catch (e) {
+                          toast.error(e instanceof Error ? e.message : 'Publish failed')
+                        } finally {
+                          setPublishing(false)
+                        }
+                        })()
+                      }}
+                      className="flex-1 py-2.5 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 disabled:opacity-60"
+                      style={{ background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', color: '#fff' }}
+                    >
+                      {publishing
+                        ? <><RefreshCw size={12} className="animate-spin" /> Publishing {publishProgress?.done}/{publishProgress?.total}...</>
+                        : <><Rocket size={12} /> Publish All {drafts.length} Markets</>
+                      }
+                    </button>
+                  )}
+                  <button
+                    onClick={() => { drafts.forEach(d => onUseMarket(d)); toast.success('All markets queued') }}
+                    className="flex-1 py-2.5 rounded-xl text-xs font-semibold"
+                    style={{ background: 'var(--surface-muted)', color: 'var(--accent)', border: '1px solid var(--border)' }}
+                  >
+                    Load All to Form
+                  </button>
+                </div>
               )}
             </div>
           )}

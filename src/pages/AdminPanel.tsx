@@ -1,5 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
-import { useAccount } from 'wagmi'
+import { useAccount, useWriteContract as useWriteContractAsync } from 'wagmi'
+import { erc20Abi } from 'viem'
+import { PREDARC_ADDRESS, PREDARC_ABI, USDC_ADDRESS } from '../lib/contract'
 import { ConnectKitButton } from 'connectkit'
 import { toast } from 'sonner'
 import { Shield, Plus, Settings, DollarSign, BarChart2, Palette, Save, Upload, RefreshCw, Sparkles } from 'lucide-react'
@@ -183,30 +185,58 @@ function MarketsTab() {
 }
 
 function AITab() {
-  const [pendingDrafts, setPendingDrafts] = useState<AIMarketDraft[]>([])
+  const { writeContractAsync } = useWriteContractAsync()
+
+  const publishDrafts = async (drafts: AIMarketDraft[]) => {
+    for (const draft of drafts) {
+      const now = new Date()
+      const endDate = new Date(now.getTime() + draft.suggestedDurationDays * 24 * 60 * 60 * 1000)
+      const resDate = new Date(endDate.getTime() + 24 * 60 * 60 * 1000)
+      const endTs = BigInt(Math.floor(endDate.getTime() / 1000))
+      const resTs = BigInt(Math.floor(resDate.getTime() / 1000))
+      const liquidity = parseUsdc(String(draft.suggestedLiquidity))
+
+      // Approve USDC
+      await writeContractAsync({
+        address: USDC_ADDRESS,
+        abi: erc20Abi,
+        functionName: 'approve',
+        args: [PREDARC_ADDRESS, liquidity * 2n],
+      })
+
+      // Create market
+      await writeContractAsync({
+        address: PREDARC_ADDRESS,
+        abi: PREDARC_ABI,
+        functionName: 'createMarket',
+        args: [
+          draft.marketType,
+          draft.question,
+          draft.outcomes,
+          endTs,
+          resTs,
+          BigInt(Math.round(draft.scalarLow)),
+          BigInt(Math.round(draft.scalarHigh)),
+          draft.category,
+          draft.imageUrl,
+          liquidity,
+        ],
+      })
+    }
+  }
 
   return (
     <div className="space-y-4">
       <div className="rounded-xl p-4" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
         <p className="text-sm font-semibold mb-1" style={{ color: 'var(--ink)' }}>AI Market Generator</p>
         <p className="text-xs" style={{ color: 'var(--subtle)' }}>
-          Generate markets from a topic, news headlines, or let AI pick trending events automatically. Markets are drafted here — review them, then click Use to load into the Create tab.
+          Generate markets from a topic, news, or auto-pick. Click <strong>Publish All</strong> to deploy all drafts onchain at once, or <strong>Use</strong> per-market to load into the Create form.
         </p>
       </div>
-      <AIMarketGenerator onUseMarket={d => setPendingDrafts(p => [...p, d])} />
-      {pendingDrafts.length > 0 && (
-        <div className="rounded-xl p-4" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
-          <p className="text-xs font-semibold mb-2" style={{ color: 'var(--muted)' }}>{pendingDrafts.length} market{pendingDrafts.length > 1 ? 's' : ''} ready — go to the Create tab to deploy each one</p>
-          <div className="space-y-1">
-            {pendingDrafts.map((d, i) => (
-              <div key={i} className="flex items-center justify-between px-3 py-2 rounded-lg" style={{ background: 'var(--surface-muted)' }}>
-                <p className="text-xs truncate flex-1 mr-2" style={{ color: 'var(--ink)' }}>{d.question}</p>
-                <button onClick={() => setPendingDrafts(p => p.filter((_, idx) => idx !== i))} className="text-xs" style={{ color: 'var(--danger)' }}>Remove</button>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+      <AIMarketGenerator
+        onUseMarket={d => toast.info('Use the Create tab to deploy: ' + d.question.slice(0, 40))}
+        onPublishAll={publishDrafts}
+      />
     </div>
   )
 }
@@ -214,6 +244,8 @@ function AITab() {
 function CreateTab() {
   const approve = useApproveUsdc()
   const create = useCreateMarket()
+  const imageFileRef = useRef<HTMLInputElement>(null)
+  const [imageMode, setImageMode] = useState<'url' | 'upload'>('url')
   const [form, setForm] = useState({
     marketType: '0',
     question: '',
@@ -368,8 +400,62 @@ function CreateTab() {
         <input type="number" value={form.initialLiquidity} onChange={e => setForm(f => ({ ...f, initialLiquidity: e.target.value }))} className={inputCls} />
       </Field>
 
-      <Field label="Image URL (optional)">
-        <input value={form.imageUrl} onChange={e => setForm(f => ({ ...f, imageUrl: e.target.value }))} placeholder="https://..." className={inputCls} />
+      <Field label="Market Image (optional)">
+        <div className="space-y-2">
+          {/* Toggle */}
+          <div className="flex rounded-lg overflow-hidden" style={{ border: '1px solid var(--border)', width: 'fit-content' }}>
+            {(['url', 'upload'] as const).map(m => (
+              <button
+                key={m}
+                onClick={() => setImageMode(m)}
+                className="px-3 py-1.5 text-xs font-medium capitalize"
+                style={{
+                  background: imageMode === m ? 'var(--accent)' : 'var(--surface-muted)',
+                  color: imageMode === m ? '#fff' : 'var(--muted)',
+                }}
+              >
+                {m === 'url' ? 'Image URL' : 'Upload File'}
+              </button>
+            ))}
+          </div>
+          {imageMode === 'url' ? (
+            <input
+              value={form.imageUrl}
+              onChange={e => setForm(f => ({ ...f, imageUrl: e.target.value }))}
+              placeholder="https://..."
+              className={inputCls}
+            />
+          ) : (
+            <div className="flex items-center gap-3">
+              {form.imageUrl && form.imageUrl.startsWith('data:') && (
+                <img src={form.imageUrl} alt="Preview" className="h-12 w-12 object-cover rounded-lg flex-shrink-0" />
+              )}
+              <button
+                onClick={() => imageFileRef.current?.click()}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs"
+                style={{ background: 'var(--surface-strong)', color: 'var(--muted)', border: '1px solid var(--border)' }}
+              >
+                <Upload size={12} /> {form.imageUrl && form.imageUrl.startsWith('data:') ? 'Change Image' : 'Choose Image'}
+              </button>
+              {form.imageUrl && form.imageUrl.startsWith('data:') && (
+                <button onClick={() => setForm(f => ({ ...f, imageUrl: '' }))} className="text-xs" style={{ color: 'var(--danger)' }}>Remove</button>
+              )}
+              <input
+                ref={imageFileRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={e => {
+                  const file = e.target.files?.[0]
+                  if (!file) return
+                  const reader = new FileReader()
+                  reader.onload = ev => setForm(f => ({ ...f, imageUrl: ev.target?.result as string ?? '' }))
+                  reader.readAsDataURL(file)
+                }}
+              />
+            </div>
+          )}
+        </div>
       </Field>
 
       <button

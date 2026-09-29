@@ -148,3 +148,23 @@ export async function requireUser(request: Request, env: Env): Promise<{ address
   } catch { return json({ error: 'Invalid signature.' }, 403) }
   return { address }
 }
+
+// ── Headlines (Google News RSS) ──────────────────────────────────────────────
+export interface Headline { title: string; source: string; url: string; published: string }
+const decodeXml = (s: string) => s
+  .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')
+  .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+  .replace(/<[^>]+>/g, '').trim()
+
+export async function fetchHeadlines(query: string, limit = 25): Promise<Headline[]> {
+  const feed = `https://news.google.com/rss/search?q=${encodeURIComponent(query.slice(0, 200) + ' when:7d')}&hl=en-US&gl=US&ceid=US:en`
+  const res = await fetch(feed, { headers: { 'user-agent': 'Mozilla/5.0 Predarc' }, cf: { cacheTtl: 600, cacheEverything: true } } as RequestInit)
+  if (!res.ok) throw new Error(`News feed returned ${res.status}`)
+  const xml = await res.text()
+  return [...xml.matchAll(/<item>([\s\S]*?)<\/item>/g)].slice(0, limit).map(m => {
+    const b = m[1]
+    const get = (t: string) => decodeXml(new RegExp(`<${t}[^>]*>([\\s\\S]*?)</${t}>`).exec(b)?.[1] ?? '')
+    const title = get('title'); const source = get('source')
+    return { title: source && title.endsWith(` - ${source}`) ? title.slice(0, -(source.length + 3)) : title, source, url: get('link'), published: get('pubDate') }
+  }).filter(i => i.title)
+}

@@ -14,18 +14,22 @@ export function useMarketActivity(marketId: bigint | undefined, outcomeCount: nu
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const seq = useRef(0)
+  const [attempt, setAttempt] = useState(0)
   const sig = pools ? pools.join(',') + ':' + String(total) : ''
 
   useEffect(() => {
     if (!client || marketId === undefined || !pools || total === undefined || feeBps === undefined || !outcomeCount) return
     const my = ++seq.current
     setLoading(true)
-    loadMarketActivity(client, activeContract(), marketId, outcomeCount, { pools, total }, feeBps, activeSettings().deployBlock)
+    Promise.race([
+      loadMarketActivity(client, activeContract(), marketId, outcomeCount, { pools, total }, feeBps, activeSettings().deployBlock),
+      new Promise<never>((_, rej) => setTimeout(() => rej(new Error('Loading activity took too long — the RPC may be slow or rate-limited.')), 90_000)),
+    ])
       .then(d => { if (my === seq.current) { setData(d); setError(null) } })
       .catch(e => { if (my === seq.current) setError(e instanceof Error ? e.message : 'Failed to load activity') })
       .finally(() => { if (my === seq.current) setLoading(false) })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [client, marketId, sig, feeBps, outcomeCount])
+  }, [client, marketId, sig, feeBps, outcomeCount, attempt])
 
-  return { data, error, loading }
+  return { data, error, loading, retry: () => setAttempt(a => a + 1) }
 }

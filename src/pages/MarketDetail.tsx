@@ -16,11 +16,11 @@ import OrderBook from '../components/market/OrderBook'
 import ActivityTable from '../components/market/ActivityTable'
 import Holders from '../components/market/Holders'
 import Comments from '../components/market/Comments'
-import AIAnalysis from '../components/market/AIAnalysis'
+import AIInsights from '../components/market/AIInsights'
 import { compactUsd, explorerBase, outcomeColor, pct, shortAddr, timeAgo, usd } from '../components/market/format'
 import MarketCard from '../components/MarketCard'
 
-type TabKey = 'book' | 'activity' | 'holders' | 'comments' | 'ai' | 'rules'
+type TabKey = 'book' | 'activity' | 'holders' | 'comments'
 const card = { background: 'var(--surface)', border: '1px solid var(--border)' } as const
 
 export default function MarketDetail() {
@@ -41,12 +41,17 @@ export default function MarketDetail() {
   const [outcome, setOutcome] = useState(0)
   const [tab, setTab] = useState<TabKey>('book')
   const [meta, setMeta] = useState<MarketMeta>({})
+  const [metaLoaded, setMetaLoaded] = useState(false)
   const [news, setNews] = useState<NewsItem[]>([])
 
   const activity = useMarketActivity(marketId, market?.outcomes.length ?? 0, market?.outcomePools as bigint[] | undefined, market?.totalLiquidity, feeBps)
   const prices = useMemo(() => (market ? pricesFromPools(market.outcomePools) : []), [market])
 
-  useEffect(() => { if (marketId !== undefined) fetchMarketMeta(marketId).then(setMeta).catch(() => setMeta({})) }, [marketId])
+  useEffect(() => {
+    if (marketId === undefined) return
+    setMetaLoaded(false)
+    fetchMarketMeta(marketId).then(setMeta).catch(() => setMeta({})).finally(() => setMetaLoaded(true))
+  }, [marketId])
   const question = market?.question
   useEffect(() => {
     if (!question) return
@@ -90,7 +95,6 @@ export default function MarketDetail() {
   const tabs: { key: TabKey; label: string; count?: number }[] = [
     { key: 'book', label: 'Order book' }, { key: 'activity', label: 'Activity', count: trades.length },
     { key: 'holders', label: 'Holders', count: activity.data?.holders.length }, { key: 'comments', label: 'Comments' },
-    { key: 'ai', label: 'AI analysis' }, { key: 'rules', label: 'Rules & details' },
   ]
 
   const share = async () => {
@@ -183,6 +187,13 @@ export default function MarketDetail() {
             </div>
           )}
 
+          {/* AI insights + rules — always visible, no tabs */}
+          <AIInsights marketId={marketId} outcomes={market.outcomes} prices={prices} meta={meta} metaLoaded={metaLoaded} isAdmin={isAdmin} active={!isResolved && !isCancelled} onMeta={setMeta} />
+          <div className="rounded-xl p-5" style={card}>
+            <h2 className="text-sm font-semibold mb-3" style={{ color: 'var(--ink-2)' }}>Rules & details</h2>
+            <Rules market={market} meta={meta} isAdmin={isAdmin} onSaved={setMeta} explorer={explorer} contract={activeContract()} created={created} feeBps={feeBps} />
+          </div>
+
           {/* Tabs */}
           <div className="rounded-xl" style={card}>
             <div className="flex overflow-x-auto px-2" style={{ borderBottom: '1px solid var(--border)' }}>
@@ -194,15 +205,11 @@ export default function MarketDetail() {
               ))}
             </div>
             <div className="p-5">
-              {tab === 'book' && !isScalar && <OrderBook state={state} feeBps={feeBps} outcomes={market.outcomes} outcome={Math.min(outcome, outN - 1)} onOutcome={setOutcome} tradable={tradable} />}
-              {tab === 'book' && isScalar && <p className="text-sm" style={{ color: 'var(--subtle)' }}>Scalar markets trade a long/short pair against the pool. Depth is shown for the “{market.outcomes[0]}” side.</p>}
-              {tab === 'book' && isScalar && <div className="mt-3"><OrderBook state={state} feeBps={feeBps} outcomes={market.outcomes} outcome={Math.min(outcome, outN - 1)} onOutcome={setOutcome} tradable={tradable} /></div>}
-              {tab === 'activity' && (activity.loading && !activity.data ? <Loading /> : <ActivityTable trades={trades} outcomes={market.outcomes} me={address} network={network} />)}
-              {tab === 'holders' && (activity.loading && !activity.data ? <Loading /> : <Holders holders={activity.data?.holders ?? []} outcomes={market.outcomes} prices={prices} me={address} network={network} />)}
+              {tab === 'book' && <OrderBook marketId={marketId} state={state} feeBps={feeBps} outcomes={market.outcomes} outcome={Math.min(outcome, outN - 1)} onOutcome={setOutcome} tradable={tradable}
+                trades={trades} activityLoading={activity.loading} activityError={activity.error} onRetry={activity.retry} network={network} />}
+              {tab === 'activity' && (!activity.data ? <ActivityState a={activity} /> : <ActivityTable trades={trades} outcomes={market.outcomes} me={address} network={network} />)}
+              {tab === 'holders' && (!activity.data ? <ActivityState a={activity} /> : <Holders holders={activity.data?.holders ?? []} outcomes={market.outcomes} prices={prices} me={address} network={network} />)}
               {tab === 'comments' && <Comments marketId={marketId} admin={isAdmin} />}
-              {tab === 'ai' && <AIAnalysis marketId={marketId} question={market.question} outcomes={market.outcomes} prices={prices} endsAt={new Date(Number(market.endTime) * 1000)} meta={meta}
-                liquidityUsd={liquidity} volumeUsd={volume} isAdmin={isAdmin} onSaved={setMeta} />}
-              {tab === 'rules' && <Rules market={market} meta={meta} isAdmin={isAdmin} onSaved={setMeta} explorer={explorer} contract={activeContract()} created={created} feeBps={feeBps} />}
             </div>
           </div>
 
@@ -278,7 +285,15 @@ const Stat = ({ label, value, icon }: { label: string; value: string; icon?: Rea
 const Info = ({ label, value }: { label: string; value: string }) => (
   <div className="flex justify-between gap-3 text-xs"><span style={{ color: 'var(--subtle)' }}>{label}</span><span className="text-right" style={{ color: 'var(--muted)' }}>{value}</span></div>
 )
-const Loading = () => <p className="text-sm py-6 text-center" style={{ color: 'var(--subtle)' }}>Loading onchain activity…</p>
+function ActivityState({ a }: { a: { loading: boolean; error: string | null; retry: () => void } }) {
+  if (a.error) return (
+    <div className="text-center py-6">
+      <p className="text-sm mb-2" style={{ color: 'var(--warning)' }}>{a.error}</p>
+      <button onClick={a.retry} className="px-3 py-1.5 rounded-lg text-xs font-semibold" style={{ background: 'var(--accent)', color: 'var(--accent-text)' }}>Try again</button>
+    </div>
+  )
+  return <p className="text-sm py-6 text-center" style={{ color: 'var(--subtle)' }}>{a.loading ? 'Loading onchain activity…' : 'No activity found.'}</p>
+}
 
 function Skeleton() {
   return (

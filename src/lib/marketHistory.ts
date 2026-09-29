@@ -30,6 +30,36 @@ async function getLogsAdaptive(client: PublicClient, address: `0x${string}`, eve
 }
 
 const createdCache = new Map<string, bigint>()
+const blockTimeCache = new Map<string, number>()
+
+const withTimeout = <T,>(p: Promise<T>, ms: number, what: string): Promise<T> =>
+  Promise.race([p, new Promise<T>((_, rej) => setTimeout(() => rej(new Error(`${what} timed out — the RPC is slow or unreachable.`)), ms))])
+
+/**
+ * Finds the block a market was created in by binary-searching the contract's market count
+ * (monotonic) — about 25 cheap calls instead of scanning millions of blocks for logs.
+ * Falls back to a log scan if the RPC has no historical state.
+ */
+async function findCreationBlock(client: PublicClient, contract: `0x${string}`, marketId: bigint, latest: bigint, deployBlock: bigint): Promise<bigint> {
+  const countAt = async (blockNumber: bigint): Promise<bigint> => {
+    try { return (await client.readContract({ address: contract, abi: COUNT_ABI, functionName: 'getTotalMarkets', blockNumber })) as bigint } catch { return 0n }
+  }
+  if ((await countAt(latest)) >= marketId) {
+    let lo = deployBlock, hi = latest
+    while (lo < hi) {
+      const mid = lo + (hi - lo) / 2n
+      if ((await countAt(mid)) >= marketId) hi = mid; else lo = mid + 1n
+    }
+    const check = await client.getLogs({ address: contract, event: EV.created as never, args: { marketId } as never, fromBlock: lo, toBlock: lo }).catch(() => [])
+    if (check.length) return lo
+  }
+  // Fallback: scan logs (works when the RPC allows wide ranges or after splitting)
+  const logs = await getLogsAdaptive(client, contract, EV.created, deployBlock, latest, { marketId })
+  if (!logs.length) throw new Error("Could not find this market's creation event on this network.")
+  return logs[0].blockNumber
+}
+
+const COUNT_ABI = [{ type: 'function', name: 'getTotalMarkets', inputs: [], outputs: [{ type: 'uint256' }], stateMutability: 'view' }] as const
 
 export interface MarketActivity {
   trades: (TradeEvent & { ts: number })[]
@@ -50,18 +80,16 @@ export async function loadMarketActivity(
   const key = `${contract}:${marketId}`
   let createdBlock = createdCache.get(key)
   if (createdBlock === undefined) {
-    const logs = await getLogsAdaptive(client, contract, EV.created, BigInt(deployBlock ?? 0), latest, { marketId })
-    if (logs.length === 0) throw new Error('Could not find this market\'s creation event.')
-    createdBlock = logs[0].blockNumber
+    createdBlock = await withTimeout(findCreationBlock(client, contract, marketId, latest, BigInt(deployBlock ?? 0)), 40_000, 'Locating the market')
     createdCache.set(key, createdBlock)
   }
   const range = [createdBlock, latest] as const
   const [bought, sold, add, rem, fees] = await Promise.all([
-    getLogsAdaptive(client, contract, EV.bought, ...range, { marketId }),
-    getLogsAdaptive(client, contract, EV.sold, ...range, { marketId }),
-    getLogsAdaptive(client, contract, EV.liqAdd, ...range, { marketId }),
-    getLogsAdaptive(client, contract, EV.liqRem, ...range, { marketId }),
-    getLogsAdaptive(client, contract, EV.fee, ...range),
+    withTimeout(getLogsAdaptive(client, contract, EV.bought, ...range, { marketId }), 60_000, 'Loading trades'),
+    withTimeout(getLogsAdaptive(client, contract, EV.sold, ...range, { marketId }), 60_000, 'Loading trades'),
+    withTimeout(getLogsAdaptive(client, contract, EV.liqAdd, ...range, { marketId }), 60_000, 'Loading trades'),
+    withTimeout(getLogsAdaptive(client, contract, EV.liqRem, ...range, { marketId }), 60_000, 'Loading trades'),
+    withTimeout(getLogsAdaptive(client, contract, EV.fee, ...range), 60_000, 'Loading fees'),
   ])
   const events: MarketEvent[] = []
   for (const l of bought) events.push({ kind: 'buy', block: l.blockNumber, logIndex: l.logIndex, txHash: l.transactionHash, user: l.args.user as `0x${string}`, outcome: Number(l.args.outcomeIndex), usdc: l.args.usdcIn as bigint, shares: l.args.sharesOut as bigint })
@@ -83,9 +111,15 @@ export async function loadMarketActivity(
   events.forEach(e => blocks.add(e.block))
   const times = new Map<bigint, number>()
   const list = [...blocks]
-  for (let i = 0; i < list.length; i += 20) {
-    await Promise.all(list.slice(i, i + 20).map(async b => {
-      try { times.set(b, Number((await client.getBlock({ blockNumber: b })).timestamp)) } catch { times.set(b, 0) }
+  for (let i = 0; i < list.length; i += 25) {
+    await Promise.all(list.slice(i, i + 25).map(async b => {
+      const ck = `${contract}:${b}`
+      const hit = blockTimeCache.get(ck)
+      if (hit) { times.set(b, hit); return }
+      try {
+        const t = Number((await withTimeout(client.getBlock({ blockNumber: b }), 15_000, 'Block lookup')).timestamp)
+        blockTimeCache.set(ck, t); times.set(b, t)
+      } catch { times.set(b, 0) }
     }))
   }
   const trades = events.filter((e): e is TradeEvent => e.kind === 'buy' || e.kind === 'sell')

@@ -78,3 +78,16 @@ export async function fetchNews(opts: { topic?: string; q?: string }): Promise<N
   const p = new URLSearchParams(); if (opts.topic) p.set('topic', opts.topic); if (opts.q) p.set('q', opts.q)
   try { return (await parse<{ items: NewsItem[] }>(await fetch(`/api/news?${p}`))).items ?? [] } catch { return [] }
 }
+
+// ── Automatic AI insights (generated server-side with the admin's saved key/model) ──
+export interface AnalysisResult { status: 'fresh' | 'generated' | 'pending' | 'unavailable' | 'closed' | 'error'; reason?: string; meta: MarketMeta }
+export async function requestAnalysis(market: bigint, force = false): Promise<AnalysisResult> {
+  const res = await fetch('/api/market-analysis', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...(force ? adminAuthHeaders() : {}) },
+    body: JSON.stringify({ network: getEffectiveNetwork(), market: String(market), force }),
+  })
+  const body = (await res.json().catch(() => ({}))) as Partial<AnalysisResult> & { error?: string }
+  if (!res.ok) throw new Error(body.error || `Request failed (${res.status})`)
+  return { status: body.status ?? 'error', reason: body.reason, meta: body.meta ?? {} }
+}

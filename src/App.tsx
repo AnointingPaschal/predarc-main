@@ -6,11 +6,14 @@ import MarketDetail from './pages/MarketDetail'
 import Portfolio from './pages/Portfolio'
 import AdminPanel from './pages/AdminPanel'
 import { useAccount } from 'wagmi'
-import { useSiteConfig, loadConfig, applyThemeVars, isAdminAddress } from './lib/adminConfig'
+import { useSiteConfig, loadConfig, applyThemeVars, isAdminAddress, useNetwork, getActiveContractAddress } from './lib/adminConfig'
 import { applyTheme } from './lib/theme'
 import { TrendingUp } from 'lucide-react'
 
 export default function App() {
+  const network = useNetwork()
+  const siteConfig = useSiteConfig()
+  const noContract = !getActiveContractAddress(siteConfig)
   useEffect(() => {
     // Apply theme on mount (before first paint)
     applyTheme()
@@ -24,7 +27,18 @@ export default function App() {
     <BrowserRouter>
       <div className="min-h-dvh theme-transition" style={{ background: 'var(--bg-gradient)' }}>
         <Navbar />
-        <main className="pb-16">
+        {network === 'testnet' && (
+          <div className="text-center text-xs py-1.5 font-medium" style={{ background: 'rgba(5,150,105,0.15)', color: '#059669' }}>
+            You are viewing Arc Testnet — test USDC only, no real funds.
+          </div>
+        )}
+        {noContract && (
+          <div className="text-center text-xs py-2 px-4 font-medium" style={{ background: 'rgba(245,158,11,0.15)', color: 'var(--warning)' }}>
+            No {network} contract is configured yet. Switch network, or set the {network} contract address in Admin → Config.
+          </div>
+        )}
+        {/* key = network: everything below remounts and refetches when the network changes */}
+        <main className="pb-16" key={network}>
           <Routes>
             <Route path="/" element={<MarketList />} />
             <Route path="/market/:id" element={<MarketDetail />} />

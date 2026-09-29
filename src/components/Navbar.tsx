@@ -2,8 +2,9 @@ import { useState, useEffect } from 'react'
 import { ConnectKitButton } from 'connectkit'
 import { Link, useLocation } from 'react-router-dom'
 import { BarChart2, Shield, Sun, Moon, Menu, X, TrendingUp, Briefcase } from 'lucide-react'
-import { useAccount } from 'wagmi'
-import { useSiteConfig, reapplyThemeVars, isAdminAddress } from '../lib/adminConfig'
+import { useAccount, useSwitchChain } from 'wagmi'
+import { toast } from 'sonner'
+import { useSiteConfig, reapplyThemeVars, isAdminAddress, useNetwork, setSelectedNetwork, type Network } from '../lib/adminConfig'
 import { getTheme, toggleTheme, type Theme } from '../lib/theme'
 
 export default function Navbar() {
@@ -11,7 +12,9 @@ export default function Navbar() {
   const [theme, setThemeState] = useState<Theme>(getTheme)
   const [mobileOpen, setMobileOpen] = useState(false)
   const config = useSiteConfig()
-  const { address } = useAccount()
+  const { address, chainId } = useAccount()
+  const { switchChainAsync } = useSwitchChain()
+  const network = useNetwork()
   const isAdmin = isAdminAddress(address, config.adminWallet)
 
   const isActive = (path: string) =>
@@ -29,6 +32,16 @@ export default function Navbar() {
     if (mobileOpen) setMobileOpen(false)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.pathname])
+
+  async function handleNetwork(n: Network) {
+    if (n === network) return
+    setSelectedNetwork(n)
+    const target = n === 'testnet' ? 5042002 : 5042
+    if (address && chainId !== target) {
+      try { await switchChainAsync({ chainId: target }) }
+      catch { toast.info(`Viewing ${n}. Switch your wallet to Arc ${n === 'testnet' ? 'Testnet' : 'Mainnet'} to transact.`) }
+    }
+  }
 
   const isDark = theme === 'dark'
 
@@ -78,6 +91,28 @@ export default function Navbar() {
 
           {/* Right actions */}
           <div className="flex items-center gap-2">
+            {/* Network switcher — for everyone; decides which network's data is shown */}
+            <div
+              className="flex rounded-xl overflow-hidden flex-shrink-0"
+              style={{ border: '1px solid var(--border)', background: 'var(--surface)' }}
+              role="group"
+              aria-label="Network"
+            >
+              {(['mainnet', 'testnet'] as const).map(n => (
+                <button
+                  key={n}
+                  onClick={() => void handleNetwork(n)}
+                  className="h-9 px-2.5 text-[11px] font-semibold capitalize theme-transition"
+                  style={{
+                    background: network === n ? (n === 'testnet' ? '#059669' : 'var(--accent)') : 'transparent',
+                    color: network === n ? '#fff' : 'var(--muted)',
+                  }}
+                >
+                  {n === 'mainnet' ? 'Main' : 'Test'}<span className="hidden sm:inline">{n === 'mainnet' ? 'net' : 'net'}</span>
+                </button>
+              ))}
+            </div>
+
             {/* Theme toggle */}
             <button
               onClick={handleToggleTheme}

@@ -1,10 +1,10 @@
 import { useReadContract } from 'wagmi'
 import { erc20Abi } from 'viem'
 import { PREDARC_ABI, USDC_ADDRESS } from '../lib/contract'
-import { loadConfig, getActiveContractAddress, getActiveChainId } from '../lib/adminConfig'
+import { activeContract, activeChainId } from '../lib/adminConfig'
 
-function activeAddress() { return getActiveContractAddress(loadConfig()) as `0x${string}` }
-function activeChain() { return getActiveChainId(loadConfig()) }
+function activeAddress() { return activeContract() }
+function activeChain() { return activeChainId() }
 
 export function useAllMarkets() {
   return useReadContract({

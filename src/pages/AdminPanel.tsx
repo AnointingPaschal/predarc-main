@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
-import { useAccount, useSignMessage, useWriteContract as useWriteContractAsync } from 'wagmi'
+import { useAccount, useConfig, useSignMessage, useWriteContract as useWriteContractAsync } from 'wagmi'
+import { waitForTransactionReceipt } from 'wagmi/actions'
 import { erc20Abi } from 'viem'
 import { PREDARC_ADDRESS, PREDARC_ABI, USDC_ADDRESS } from '../lib/contract'
 import { ConnectKitButton } from 'connectkit'
@@ -12,8 +13,8 @@ import {
 } from '../hooks/useEscrow'
 import { useApproveUsdc } from '../hooks/useEscrow'
 import { Market, MarketStatus, MarketType, formatUsdc, parseUsdc, CATEGORIES } from '../lib/contract'
-import { loadConfig, saveConfig, resetConfig, useSiteConfig, isAdminAddress, getAdminSession, signInAsAdmin, DEFAULT_DARK, DEFAULT_LIGHT, SiteConfig, ThemeColors, getActiveContractAddress } from '../lib/adminConfig'
-import { OPENROUTER_MODELS } from '../lib/aiMarkets'
+import { loadConfig, loadRawConfig, useNetwork, activeChainId, saveConfig, resetConfig, useSiteConfig, isAdminAddress, getAdminSession, signInAsAdmin, DEFAULT_DARK, DEFAULT_LIGHT, SiteConfig, ThemeColors, getActiveContractAddress } from '../lib/adminConfig'
+import { OPENROUTER_MODELS, testOpenRouterConnection, type ConnectionStep } from '../lib/aiMarkets'
 import AIMarketGenerator from '../components/AIMarketGenerator'
 import type { AIMarketDraft } from '../lib/aiMarkets'
 import { parseOnchainError } from '../lib/errors'
@@ -125,7 +126,7 @@ export default function AdminPanel() {
 
       {tab === 'markets' && <MarketsTab />}
       {tab === 'create' && <CreateTab />}
-      {tab === 'ai' && <AITab />}
+      <div hidden={tab !== 'ai'}><AITab /></div>
       {tab === 'fees' && <FeesTab />}
       {tab === 'branding' && <BrandingTab />}
       {tab === 'config' && <ConfigTab />}
@@ -240,51 +241,70 @@ function MarketsTab() {
 
 function AITab() {
   const { writeContractAsync } = useWriteContractAsync()
+  const wagmiConfig = useConfig()
+  const { address, chainId } = useAccount()
+  const network = useNetwork()
 
   const publishDrafts = async (drafts: AIMarketDraft[]) => {
-    for (const draft of drafts) {
-      const now = new Date()
-      const endDate = new Date(now.getTime() + draft.suggestedDurationDays * 24 * 60 * 60 * 1000)
-      const resDate = new Date(endDate.getTime() + 24 * 60 * 60 * 1000)
-      const endTs = BigInt(Math.floor(endDate.getTime() / 1000))
-      const resTs = BigInt(Math.floor(resDate.getTime() / 1000))
-      const liquidity = parseUsdc(String(draft.suggestedLiquidity))
+    const target = activeChainId()
+    if (!activeAddress()) { toast.error(`No ${network} contract set. Add it in Config.`); return }
+    if (chainId !== target) { toast.error(`Switch your wallet to Arc ${network === 'testnet' ? 'Testnet' : 'Mainnet'} first.`); return }
+    const wait = async (hash: `0x${string}`) => {
+      const r = await waitForTransactionReceipt(wagmiConfig, { hash, chainId: target })
+      if (r.status !== 'success') throw new Error('Transaction reverted')
+    }
+    let published = 0
+    try {
+      for (const draft of drafts) {
+        const now = new Date()
+        const endDate = new Date(now.getTime() + draft.suggestedDurationDays * 24 * 60 * 60 * 1000)
+        const resDate = new Date(endDate.getTime() + 24 * 60 * 60 * 1000)
+        const endTs = BigInt(Math.floor(endDate.getTime() / 1000))
+        const resTs = BigInt(Math.floor(resDate.getTime() / 1000))
+        const liquidity = parseUsdc(String(draft.suggestedLiquidity))
 
-      // Approve USDC
-      await writeContractAsync({
-        address: USDC_ADDRESS,
-        abi: erc20Abi,
-        functionName: 'approve',
-        args: [activeAddress(), liquidity],
-      })
+        // Approve USDC and wait until it is mined, otherwise createMarket reverts
+        await wait(await writeContractAsync({
+          address: USDC_ADDRESS,
+          chainId: target,
+          abi: erc20Abi,
+          functionName: 'approve',
+          args: [activeAddress(), liquidity],
+        }))
 
-      // Create market
-      await writeContractAsync({
-        address: activeAddress(),
-        abi: PREDARC_ABI,
-        functionName: 'createMarket',
-        args: [
-          draft.marketType,
-          draft.question,
-          draft.outcomes,
-          endTs,
-          resTs,
-          BigInt(Math.round(draft.scalarLow)),
-          BigInt(Math.round(draft.scalarHigh)),
-          draft.category,
-          draft.imageUrl,
-          liquidity,
-        ],
-      })
+        await wait(await writeContractAsync({
+          address: activeAddress(),
+          chainId: target,
+          abi: PREDARC_ABI,
+          functionName: 'createMarket',
+          args: [
+            draft.marketType,
+            draft.question,
+            draft.outcomes,
+            endTs,
+            resTs,
+            BigInt(Math.round(draft.scalarLow)),
+            BigInt(Math.round(draft.scalarHigh)),
+            draft.category,
+            draft.imageUrl,
+            liquidity,
+          ],
+        }))
+        published++
+        toast.success(`Published ${published}/${drafts.length} on ${network}`)
+      }
+    } catch (e) {
+      toast.error(`Stopped after ${published}/${drafts.length}: ${parseOnchainError(e)}`)
     }
   }
+  void address
 
   return (
     <div className="space-y-4">
       <div className="rounded-xl p-4" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
         <p className="text-sm font-semibold mb-1" style={{ color: 'var(--ink)' }}>AI Market Generator</p>
         <p className="text-xs" style={{ color: 'var(--subtle)' }}>
-          Generate markets from a topic, news, or auto-pick. Click <strong>Publish All</strong> to deploy all drafts onchain at once, or <strong>Use</strong> per-market to load into the Create form.
+          Generate markets from a topic, news, or auto-pick. Markets publish to the network you are viewing (<strong>{network === 'testnet' ? 'Arc Testnet' : 'Arc Mainnet'}</strong>). Click <strong>Publish All</strong> to deploy all drafts onchain, or <strong>Use</strong> per-market to load into the Create form.
         </p>
       </div>
       <AIMarketGenerator
@@ -665,7 +685,7 @@ function ThemeEditor({
 }
 
 function BrandingTab() {
-  const [config, setConfig] = useState<SiteConfig>(loadConfig)
+  const [config, setConfig] = useState<SiteConfig>(loadRawConfig)
   const [themeTab, setThemeTab] = useState<ThemeMode>('dark')
   const fileRef = useRef<HTMLInputElement>(null)
 
@@ -788,12 +808,14 @@ function BrandingTab() {
 }
 
 function ConfigTab() {
-  const [config, setConfig] = useState<SiteConfig>(loadConfig)
+  const [config, setConfig] = useState<SiteConfig>(loadRawConfig)
+  const [testing, setTesting] = useState(false)
+  const [testSteps, setTestSteps] = useState<ConnectionStep[] | null>(null)
 
   const handleSave = async () => {
     try {
       await saveConfig(config)
-      setConfig(loadConfig())
+      setConfig(loadRawConfig())
       toast.success('Config saved to Cloudflare!')
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Save failed')
@@ -811,7 +833,7 @@ function ConfigTab() {
       <div className="p-4 rounded-xl space-y-3" style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)' }}>
         <div className="flex items-center justify-between">
           <div>
-            <p className="text-sm font-semibold" style={{ color: 'var(--ink)' }}>Network</p>
+            <p className="text-sm font-semibold" style={{ color: 'var(--ink)' }}>Default network for visitors</p>
             <p className="text-xs mt-0.5" style={{ color: 'var(--subtle)' }}>
               {config.network === 'testnet'
                 ? 'Arc Testnet (chain 5042002) — free test USDC, safe for testing'
@@ -897,8 +919,8 @@ function ConfigTab() {
           </Field>
           <Field label="AI Model">
             <select
-              value={config.openrouterModel}
-              onChange={e => setConfig(c => ({ ...c, openrouterModel: e.target.value }))}
+              value={OPENROUTER_MODELS.some(m => m.id === config.openrouterModel) ? config.openrouterModel : 'custom'}
+              onChange={e => setConfig(c => ({ ...c, openrouterModel: e.target.value === 'custom' ? (OPENROUTER_MODELS.some(m => m.id === c.openrouterModel) ? '' : c.openrouterModel) : e.target.value }))}
               className={selectCls}
             >
               {OPENROUTER_MODELS.map(m => (
@@ -907,7 +929,7 @@ function ConfigTab() {
               <option value="custom">Custom model ID</option>
             </select>
           </Field>
-          {config.openrouterModel === 'custom' && (
+          {!OPENROUTER_MODELS.some(m => m.id === config.openrouterModel) && (
             <Field label="Custom Model ID">
               <input
                 value={config.openrouterModel}
@@ -917,6 +939,34 @@ function ConfigTab() {
               />
             </Field>
           )}
+          <div className="space-y-2">
+            <button
+              type="button"
+              onClick={async () => {
+                setTesting(true); setTestSteps(null)
+                try { setTestSteps(await testOpenRouterConnection(config.openrouterApiKey, config.openrouterModel)) }
+                finally { setTesting(false) }
+              }}
+              disabled={testing}
+              className="w-full py-2.5 rounded-lg text-sm font-semibold flex items-center justify-center gap-2 disabled:opacity-60"
+              style={{ background: 'transparent', color: 'var(--ink)', border: '1px solid var(--border)' }}
+            >
+              <RefreshCw size={13} className={testing ? 'animate-spin' : ''} />
+              {testing ? 'Testing connection…' : 'Test OpenRouter connection'}
+            </button>
+            {testSteps && (
+              <div className="rounded-xl p-3 space-y-1.5" style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)' }}>
+                {testSteps.map((st, i) => (
+                  <p key={i} className="text-xs" style={{ color: st.ok ? 'var(--success)' : 'var(--danger)' }}>
+                    {st.ok ? '✓' : '✗'} <strong>{st.label}</strong> — {st.detail}
+                  </p>
+                ))}
+                {testSteps.every(x => x.ok) && (
+                  <p className="text-xs font-medium" style={{ color: 'var(--success)' }}>Connected — AI is ready. Press Save Config to keep these settings.</p>
+                )}
+              </div>
+            )}
+          </div>
           <div className="grid grid-cols-2 gap-3">
             <Field label="Auto-gen interval (minutes)">
               <input
@@ -939,7 +989,7 @@ function ConfigTab() {
           <div className="flex items-center justify-between px-3 py-2.5 rounded-xl" style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)' }}>
             <div>
               <p className="text-xs font-medium" style={{ color: 'var(--ink)' }}>Enable auto-generation</p>
-              <p className="text-[10px]" style={{ color: 'var(--subtle)' }}>AI will draft new markets at the interval above (requires admin panel open)</p>
+              <p className="text-[10px]" style={{ color: 'var(--subtle)' }}>AI drafts 3 new markets per interval for you to review and publish (admin panel must stay open)</p>
             </div>
             <button
               onClick={() => setConfig(c => ({ ...c, aiAutoGenEnabled: !c.aiAutoGenEnabled }))}
@@ -962,7 +1012,7 @@ function ConfigTab() {
       <button
         onClick={async () => {
           if (!window.confirm('Delete all saved settings from Cloudflare and reset to defaults?')) return
-          try { await resetConfig(); setConfig(loadConfig()); toast.success('Reset to defaults.') }
+          try { await resetConfig(); setConfig(loadRawConfig()); toast.success('Reset to defaults.') }
           catch (e) { toast.error(e instanceof Error ? e.message : 'Reset failed') }
         }}
         className="w-full py-2 rounded-lg text-xs flex items-center justify-center gap-1.5"

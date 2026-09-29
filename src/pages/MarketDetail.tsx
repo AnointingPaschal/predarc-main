@@ -3,6 +3,7 @@ import { ArrowLeft, Clock, TrendingUp, CheckCircle, ExternalLink } from 'lucide-
 import { useAccount } from 'wagmi'
 import { toast } from 'sonner'
 import { useMarket } from '../hooks/useMarkets'
+import { getEffectiveNetwork } from '../lib/adminConfig'
 import { useRedeemWinnings } from '../hooks/useEscrow'
 import TradingPanel from '../components/TradingPanel'
 import {
@@ -150,7 +151,7 @@ export default function MarketDetail() {
             <InfoRow label="Pool" value={`$${formatUsdc(market.totalLiquidity)}`} />
             <InfoRow label="Fees collected" value={`$${formatUsdc(market.feesCollected)}`} />
             <a
-              href={`https://explorer.arc.io/address/${market.creator}`}
+              href={`https://${getEffectiveNetwork() === 'testnet' ? 'explorer.testnet.arc.io' : 'explorer.arc.io'}/address/${market.creator}`}
               target="_blank"
               rel="noopener noreferrer"
               className="flex items-center gap-1 text-xs transition-opacity hover:opacity-70"

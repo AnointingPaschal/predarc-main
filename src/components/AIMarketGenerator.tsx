@@ -1,8 +1,8 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Sparkles, RefreshCw, ChevronDown, ChevronUp, Zap, Newspaper, List, Bot, Check, X, Rocket } from 'lucide-react'
 import { toast } from 'sonner'
 import { generateMarkets, AIMarketDraft, AIGenerateMode, OPENROUTER_MODELS } from '../lib/aiMarkets'
-import { loadConfig } from '../lib/adminConfig'
+import { useSiteConfig } from '../lib/adminConfig'
 import { CATEGORIES } from '../lib/contract'
 
 interface AIMarketGeneratorProps {
@@ -36,8 +36,46 @@ export default function AIMarketGenerator({ onUseMarket, onPublishAll }: AIMarke
   const [drafts, setDrafts] = useState<AIMarketDraft[]>([])
   const [expandedIdx, setExpandedIdx] = useState<number | null>(null)
 
-  const config = loadConfig()
+  const config = useSiteConfig()
   const hasKey = !!config.openrouterApiKey
+
+  // ── Auto-generation ────────────────────────────────────────────────────────
+  // While the admin panel is open and auto-gen is enabled in Config, draft new
+  // markets on the configured interval and append them for review. Publishing
+  // always needs the admin's wallet signature, so nothing is sent onchain here.
+  const draftsRef = useRef<AIMarketDraft[]>([])
+  draftsRef.current = drafts
+  const [autoStatus, setAutoStatus] = useState('')
+  useEffect(() => {
+    if (!config.aiAutoGenEnabled || !hasKey) { setAutoStatus(''); return }
+    const minutes = Math.max(5, config.aiAutoGenInterval || 60)
+    let cancelled = false
+    let running = false
+    const cats = config.aiAutoGenCategories.split(',').map(c => c.trim()).filter(Boolean)
+    const run = async () => {
+      if (running || cancelled) return
+      running = true
+      try {
+        const results = await generateMarkets({
+          mode: 'auto', count: 3,
+          categories: cats.length ? cats : undefined,
+          avoid: draftsRef.current.map(d => d.question),
+          apiKey: config.openrouterApiKey,
+          model: config.openrouterModel || 'openai/gpt-4o-mini',
+        })
+        if (!cancelled && results.length) {
+          setDrafts(prev => [...prev, ...results])
+          toast.success(`Auto-gen drafted ${results.length} new market${results.length > 1 ? 's' : ''} — review in the AI tab`)
+        }
+        setAutoStatus(`Last auto-run ${new Date().toLocaleTimeString()} · next in ${minutes} min`)
+      } catch (e) {
+        setAutoStatus(`Auto-run failed: ${e instanceof Error ? e.message : 'unknown error'}`)
+      } finally { running = false }
+    }
+    setAutoStatus(`Auto-gen on · first run in ${minutes} min`)
+    const id = window.setInterval(() => { void run() }, minutes * 60_000)
+    return () => { cancelled = true; window.clearInterval(id) }
+  }, [config.aiAutoGenEnabled, config.aiAutoGenInterval, config.aiAutoGenCategories, config.openrouterApiKey, config.openrouterModel, hasKey])
 
   const toggleCategory = (cat: string) => {
     setSelectedCategories(prev =>
@@ -117,7 +155,7 @@ export default function AIMarketGenerator({ onUseMarket, onPublishAll }: AIMarke
           <div className="text-left">
             <p className="text-sm font-semibold" style={{ color: 'var(--ink)' }}>AI Market Generator</p>
             <p className="text-xs" style={{ color: 'var(--subtle)' }}>
-              {hasKey ? `Powered by ${OPENROUTER_MODELS.find(m => m.id === config.openrouterModel)?.label ?? config.openrouterModel}` : 'Configure API key in Config tab'}
+              {autoStatus ? autoStatus + ' · ' : ''}{hasKey ? `Powered by ${OPENROUTER_MODELS.find(m => m.id === config.openrouterModel)?.label ?? config.openrouterModel}` : 'Configure API key in Config tab'}
             </p>
           </div>
         </div>

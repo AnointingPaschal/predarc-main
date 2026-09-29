@@ -116,7 +116,7 @@ export const DEFAULT_CONFIG: SiteConfig = {
   discordUrl: '',
   githubUrl: '',
   network: (ENV.network === 'testnet' ? 'testnet' : 'mainnet'),
-  contractAddress:        ENV.contractAddress        || '0xa78c2aa7a9ccff28ba42e59ae0a8c86f0da4e275',
+  contractAddress:        ENV.contractAddress,
   testnetContractAddress: ENV.testnetContractAddress || '0xa78c2aa7a9ccff28ba42e59ae0a8c86f0da4e275',
   rpcUrl:           ENV.rpcUrl,
   chainId: 5042,
@@ -160,8 +160,38 @@ function mergeConfig(parsed: Partial<SiteConfig> | null | undefined): SiteConfig
 }
 
 // ── In-memory store ──────────────────────────────────────────────────────────
+// `current` is the saved (server) config. Each visitor can additionally pick a
+// network to view; that choice is kept in a cookie and overrides `network`.
 let current: SiteConfig = mergeConfig(null)
 const listeners = new Set<() => void>()
+
+export type Network = 'mainnet' | 'testnet'
+const NET_COOKIE = 'predarc_network'
+
+function readSelectedNetwork(): Network | null {
+  try {
+    const q = new URLSearchParams(window.location.search).get('network')
+    if (q === 'mainnet' || q === 'testnet') return q
+    const m = document.cookie.match(new RegExp(`(?:^|; )${NET_COOKIE}=(mainnet|testnet)`))
+    return (m?.[1] as Network | undefined) ?? null
+  } catch { return null }
+}
+let selectedNetwork: Network | null = readSelectedNetwork()
+
+/** The network this visitor is viewing: their own choice, else the admin default. */
+export function getEffectiveNetwork(): Network {
+  return selectedNetwork ?? current.network
+}
+
+export function setSelectedNetwork(n: Network): void {
+  selectedNetwork = n
+  try { document.cookie = `${NET_COOKIE}=${n}; path=/; max-age=31536000; SameSite=Lax` } catch { /* ignore */ }
+  listeners.forEach(l => l())
+}
+
+export function useNetwork(): Network {
+  return useSyncExternalStore(subscribeConfig, getEffectiveNetwork, getEffectiveNetwork)
+}
 
 function setCurrent(c: SiteConfig) {
   current = c
@@ -173,14 +203,33 @@ export function subscribeConfig(cb: () => void): () => void {
   return () => { listeners.delete(cb) }
 }
 
-/** Synchronous read of the current in-memory config. */
-export function loadConfig(): SiteConfig {
+/** Raw saved config (what the admin edits — no per-visitor network override). */
+export function loadRawConfig(): SiteConfig {
   return current
 }
 
-/** React hook: re-renders when the config changes. */
+// Cached so useSyncExternalStore gets a stable reference between changes
+let effCache: { base: SiteConfig; net: Network; value: SiteConfig } | null = null
+
+/** Synchronous read of the config as this visitor sees it (network override applied). */
+export function loadConfig(): SiteConfig {
+  const net = getEffectiveNetwork()
+  if (!effCache || effCache.base !== current || effCache.net !== net) {
+    effCache = { base: current, net, value: net === current.network ? current : { ...current, network: net } }
+  }
+  return effCache.value
+}
+
+/** React hook: re-renders when the config or the viewed network changes. */
 export function useSiteConfig(): SiteConfig {
   return useSyncExternalStore(subscribeConfig, loadConfig, loadConfig)
+}
+
+export function activeContract(): `0x${string}` {
+  return getActiveContractAddress(loadConfig()) as `0x${string}`
+}
+export function activeChainId(): number {
+  return getActiveChainId(loadConfig())
 }
 
 /** Fetch the public config from Cloudflare. Never throws; falls back to defaults. */

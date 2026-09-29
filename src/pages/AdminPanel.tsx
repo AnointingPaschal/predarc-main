@@ -13,7 +13,7 @@ import {
 } from '../hooks/useEscrow'
 import { useApproveUsdc } from '../hooks/useEscrow'
 import { Market, MarketStatus, MarketType, formatUsdc, parseUsdc, CATEGORIES } from '../lib/contract'
-import { loadConfig, loadRawConfig, useNetwork, activeChainId, saveConfig, resetConfig, useSiteConfig, isAdminAddress, getAdminSession, signInAsAdmin, DEFAULT_DARK, DEFAULT_LIGHT, SiteConfig, ThemeColors, getActiveContractAddress } from '../lib/adminConfig'
+import { loadConfig, loadRawConfig, useNetwork, activeChainId, saveConfig, resetConfig, useSiteConfig, isAdminAddress, getAdminSession, signInAsAdmin, importLegacyConfig, DEFAULT_DARK, DEFAULT_LIGHT, SiteConfig, ThemeColors, getActiveContractAddress } from '../lib/adminConfig'
 import { OPENROUTER_MODELS, testOpenRouterConnection, type ConnectionStep } from '../lib/aiMarkets'
 import AIMarketGenerator from '../components/AIMarketGenerator'
 import type { AIMarketDraft } from '../lib/aiMarkets'
@@ -29,6 +29,7 @@ export default function AdminPanel() {
   const { signMessageAsync } = useSignMessage()
   const [tab, setTab] = useState<Tab>('markets')
   const [signing, setSigning] = useState(false)
+  const [signError, setSignError] = useState('')
   const [, bump] = useState(0)
   const isAdmin = isAdminAddress(address, siteConfig.adminWallet)
   const verified = !!address && !!getAdminSession(address)
@@ -36,11 +37,13 @@ export default function AdminPanel() {
   async function handleSignIn() {
     if (!address) return
     setSigning(true)
+    setSignError('')
     try {
       await signInAsAdmin(address, args => signMessageAsync(args))
+      if (importLegacyConfig()) toast.info('Imported old settings from this browser. Open Config and press Save to store them in Cloudflare.', { duration: 10000 })
       bump(n => n + 1)
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Sign-in failed')
+      setSignError(e instanceof Error ? e.message : 'Sign-in failed')
     } finally {
       setSigning(false)
     }
@@ -75,6 +78,11 @@ export default function AdminPanel() {
         >
           {signing ? 'Waiting for signature…' : 'Sign in as admin'}
         </button>
+        {signError && (
+          <p className="mt-4 text-xs rounded-lg px-3 py-2 text-left" style={{ color: 'var(--danger)', background: 'var(--surface-muted)', border: '1px solid var(--border)' }}>
+            {signError}
+          </p>
+        )}
       </div>
     )
   }
@@ -700,7 +708,7 @@ function BrandingTab() {
   const handleSave = async () => {
     try {
       await saveConfig(config)
-      toast.success('Branding saved to Cloudflare and applied!')
+      toast.success('Branding saved to Cloudflare and verified ✓')
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Save failed')
     }
@@ -816,7 +824,7 @@ function ConfigTab() {
     try {
       await saveConfig(config)
       setConfig(loadRawConfig())
-      toast.success('Config saved to Cloudflare!')
+      toast.success('Config saved to Cloudflare and verified ✓')
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Save failed')
     }

@@ -4,7 +4,7 @@ import { Link, useLocation } from 'react-router-dom'
 import { BarChart2, Shield, Sun, Moon, Menu, X, TrendingUp, Briefcase } from 'lucide-react'
 import { useAccount, useSwitchChain } from 'wagmi'
 import { toast } from 'sonner'
-import { useSiteConfig, reapplyThemeVars, isAdminAddress, useNetwork, setSelectedNetwork, type Network } from '../lib/adminConfig'
+import { useSiteConfig, reapplyThemeVars, isAdminAddress, useNetwork, setSelectedNetwork, setAdminView, type Network } from '../lib/adminConfig'
 import { getTheme, toggleTheme, type Theme } from '../lib/theme'
 
 export default function Navbar() {
@@ -16,6 +16,7 @@ export default function Navbar() {
   const { switchChainAsync } = useSwitchChain()
   const network = useNetwork()
   const isAdmin = isAdminAddress(address, config.adminWallet)
+  useEffect(() => { setAdminView(isAdmin) }, [isAdmin])
 
   const isActive = (path: string) =>
     path === '/' ? location.pathname === '/' : location.pathname.startsWith(path)
@@ -91,8 +92,8 @@ export default function Navbar() {
 
           {/* Right actions */}
           <div className="flex items-center gap-2">
-            {/* Network switcher — for everyone; decides which network's data is shown */}
-            <div
+            {/* Network switcher — admin wallet only (public visitors follow the saved default) */}
+            {isAdmin && <div
               className="flex rounded-xl overflow-hidden flex-shrink-0"
               style={{ border: '1px solid var(--border)', background: 'var(--surface)' }}
               role="group"
@@ -111,7 +112,7 @@ export default function Navbar() {
                   {n === 'mainnet' ? 'Main' : 'Test'}<span className="hidden sm:inline">{n === 'mainnet' ? 'net' : 'net'}</span>
                 </button>
               ))}
-            </div>
+            </div>}
 
             {/* Theme toggle */}
             <button

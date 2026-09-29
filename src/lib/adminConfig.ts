@@ -178,9 +178,18 @@ function readSelectedNetwork(): Network | null {
 }
 let selectedNetwork: Network | null = readSelectedNetwork()
 
-/** The network this visitor is viewing: their own choice, else the admin default. */
+// Only the admin wallet may pick a network to view. Everyone else always sees
+// the admin's saved default network (Admin → Config).
+let adminView = false
+export function setAdminView(v: boolean): void {
+  if (adminView === v) return
+  adminView = v
+  listeners.forEach(l => l())
+}
+
+/** The network being viewed: the admin's own pick (admin only), else the saved default. */
 export function getEffectiveNetwork(): Network {
-  return selectedNetwork ?? current.network
+  return (adminView && selectedNetwork) || current.network
 }
 
 export function setSelectedNetwork(n: Network): void {
@@ -261,6 +270,36 @@ export function isAdminAddress(address: string | undefined, adminWallet: string 
   return !!address && !!adminWallet && address.toLowerCase() === adminWallet.trim().toLowerCase()
 }
 
+/** Parse an API response as JSON, with a clear error when Functions aren't serving it. */
+async function apiJson<T>(res: Response): Promise<T> {
+  const type = res.headers.get('content-type') ?? ''
+  if (!type.includes('json')) {
+    throw new Error(`Config API is not responding (HTTP ${res.status}, got ${type || 'no content-type'}). Make sure the latest deployment finished and includes the functions/ folder.`)
+  }
+  const body = (await res.json()) as T & { error?: string }
+  if (!res.ok) throw new Error(body.error || `Request failed (${res.status})`)
+  return body
+}
+
+function makeHeaders(s: AdminSession): Record<string, string> {
+  return {
+    'x-admin-address': s.address,
+    'x-admin-message': btoa(String.fromCharCode(...new TextEncoder().encode(s.message))),
+    'x-admin-signature': s.signature,
+  }
+}
+
+function adminHeaders(): Record<string, string> {
+  const s = getAdminSession()
+  if (!s) throw new Error('Admin session expired. Please sign in again.')
+  return makeHeaders(s)
+}
+
+async function getAdminConfigRaw(headers: Record<string, string>): Promise<Partial<SiteConfig>> {
+  const res = await fetch('/api/admin/config', { headers, cache: 'no-store' })
+  return (await apiJson<{ config?: Partial<SiteConfig> }>(res)).config ?? {}
+}
+
 /** Ask the admin wallet to sign a 1-hour session message, then load the full config. */
 export async function signInAsAdmin(
   address: string,
@@ -276,51 +315,83 @@ export async function signInAsAdmin(
     `Expires: ${expires}`,
   ].join('\n')
   const signature = await signMessage({ message })
-  session = { address: address.toLowerCase(), message, signature, expires }
-  await fetchAdminConfig()
+  const candidate: AdminSession = { address: address.toLowerCase(), message, signature, expires }
+  // Only keep the session once the server has accepted it
+  const cfg = await getAdminConfigRaw(makeHeaders(candidate))
+  session = candidate
+  setCurrent(mergeConfig(cfg))
+  applyThemeVars(current)
 }
 
-function adminHeaders(): Record<string, string> {
-  const s = getAdminSession()
-  if (!s) throw new Error('Admin session expired. Please sign in again.')
-  return {
-    'x-admin-address': s.address,
-    'x-admin-message': btoa(String.fromCharCode(...new TextEncoder().encode(s.message))),
-    'x-admin-signature': s.signature,
-  }
-}
-
-async function apiError(res: Response): Promise<Error> {
-  const body = (await res.json().catch(() => ({}))) as { error?: string }
-  return new Error(body.error || `Request failed (${res.status})`)
-}
-
-/** Load the full config (including secrets) — admin only. */
+/** Reload the full config (including secrets) from Cloudflare — admin only. */
 export async function fetchAdminConfig(): Promise<SiteConfig> {
-  const res = await fetch('/api/admin/config', { headers: adminHeaders(), cache: 'no-store' })
-  if (!res.ok) { if (res.status === 401) session = null; throw await apiError(res) }
-  const data = (await res.json()) as { config?: Partial<SiteConfig> }
-  setCurrent(mergeConfig(data.config))
+  try {
+    setCurrent(mergeConfig(await getAdminConfigRaw(adminHeaders())))
+  } catch (e) {
+    session = null
+    throw e
+  }
   applyThemeVars(current)
   return current
 }
 
-/** Save config to Cloudflare KV (admin signature required) and apply it. */
+/** Fields compared when verifying that a save really reached Cloudflare. */
+const VERIFY_FIELDS: (keyof SiteConfig)[] = [
+  'siteName', 'network', 'contractAddress', 'testnetContractAddress', 'feeRecipient',
+  'openrouterApiKey', 'openrouterModel', 'aiAutoGenEnabled', 'chainlinkBtcFeed', 'chainlinkEthFeed',
+]
+
+/** Save config to Cloudflare KV, then read it back to prove it persisted. */
 export async function saveConfig(config: SiteConfig): Promise<void> {
+  const headers = adminHeaders()
   const res = await fetch('/api/admin/config', {
     method: 'PUT',
-    headers: { ...adminHeaders(), 'content-type': 'application/json' },
+    headers: { ...headers, 'content-type': 'application/json' },
     body: JSON.stringify(config),
   })
-  if (!res.ok) { if (res.status === 401) session = null; throw await apiError(res) }
-  setCurrent(mergeConfig(config))
+  try { await apiJson<{ ok: boolean }>(res) } catch (e) { if (res.status === 401) session = null; throw e }
+
+  const stored = mergeConfig(await getAdminConfigRaw(headers))
+  const bad = VERIFY_FIELDS.filter(k => JSON.stringify(stored[k]) !== JSON.stringify(config[k]))
+  if (bad.length) throw new Error(`Save did not persist (${bad.join(', ')}). Check the PREDARC_KV binding in Cloudflare and redeploy.`)
+  setCurrent(stored)
   applyThemeVars(current)
+}
+
+const LEGACY_KEY = 'predarc_admin_config'
+
+/**
+ * One-time migration: older versions kept settings in this browser's localStorage.
+ * Merge them under the server values (server wins), then delete the local copy.
+ * Returns true if anything was imported. The admin must still press Save.
+ */
+export function importLegacyConfig(): boolean {
+  try {
+    const raw = localStorage.getItem(LEGACY_KEY)
+    if (!raw) return false
+    const legacy = JSON.parse(raw) as Partial<SiteConfig>
+    const defaults = mergeConfig(null) as unknown as Record<string, unknown>
+    const cur = current as unknown as Record<string, unknown>
+    const merged: Record<string, unknown> = { ...cur }
+    let changed = false
+    for (const [k, v] of Object.entries(legacy)) {
+      if (k === 'adminWallet' || v === '' || v == null || typeof v === 'object') continue
+      // only fill values the server does not have yet (still at default/empty)
+      if (JSON.stringify(cur[k]) === JSON.stringify(defaults[k]) && JSON.stringify(v) !== JSON.stringify(cur[k])) {
+        merged[k] = v
+        changed = true
+      }
+    }
+    localStorage.removeItem(LEGACY_KEY)
+    if (changed) setCurrent(mergeConfig(merged as Partial<SiteConfig>))
+    return changed
+  } catch { return false }
 }
 
 /** Delete saved config from Cloudflare KV, returning to defaults. */
 export async function resetConfig(): Promise<void> {
   const res = await fetch('/api/admin/config', { method: 'DELETE', headers: adminHeaders() })
-  if (!res.ok) throw await apiError(res)
+  await apiJson<{ ok: boolean }>(res)
   setCurrent(mergeConfig(null))
   applyThemeVars(current)
 }

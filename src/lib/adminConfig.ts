@@ -31,6 +31,7 @@ export interface NetworkSettings {
   chainlinkEthFeed: string
   deployBlock?: number // optional: block the contract was deployed at (speeds up history)
   minLiquidityUsdc: number // UI-side minimum for market creation (the contract enforces its own)
+  btcRoundsAddress: string // PredarcBtcRounds contract (Bitcoin Up/Down rounds)
 }
 
 export interface SiteConfig {
@@ -68,6 +69,12 @@ export interface SiteConfig {
   aiAutoGenEnabled: boolean
   aiAutoGenInterval: number   // minutes between auto-generated markets
   aiAutoGenCategories: string // comma-separated list of categories to auto-generate
+
+  // Bitcoin Up/Down rounds
+  btcEnabled: boolean          // show the feature to visitors (off = hidden everywhere)
+  btcShowOnHome: boolean       // promo card on the home page
+  btcTitle: string             // heading shown on the rounds page and card
+  btcAutoKeeper: boolean       // visitors' browsers ping the keeper so rounds always advance
 }
 
 export const DEFAULT_DARK: ThemeColors = {
@@ -133,6 +140,7 @@ export const DEFAULT_CONFIG: SiteConfig = {
     chainlinkBtcFeed: ENV.chainlinkBtcFeed,
     chainlinkEthFeed: ENV.chainlinkEthFeed,
     minLiquidityUsdc: 0,
+    btcRoundsAddress: '',
   },
   testnet: {
     contractAddress:  ENV.testnetContractAddress,
@@ -142,6 +150,7 @@ export const DEFAULT_CONFIG: SiteConfig = {
     chainlinkBtcFeed: '',
     chainlinkEthFeed: '',
     minLiquidityUsdc: 0,
+    btcRoundsAddress: '',
   },
   adminWallet: ENV.adminWallet,
   openrouterApiKey: '',
@@ -151,6 +160,10 @@ export const DEFAULT_CONFIG: SiteConfig = {
   aiAutoGenEnabled: false,
   aiAutoGenInterval: 60,
   aiAutoGenCategories: 'Crypto,Sports,Politics',
+  btcEnabled: true,
+  btcShowOnHome: true,
+  btcTitle: 'Bitcoin Up or Down',
+  btcAutoKeeper: true,
 }
 
 // ── Per-network helpers ──────────────────────────────────────────────────────

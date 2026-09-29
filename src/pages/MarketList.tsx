@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react'
 import { Search, TrendingUp, Zap, BarChart2, Activity } from 'lucide-react'
 import MarketCard from '../components/MarketCard'
+import BtcPromo from '../components/BtcPromo'
 import { useAllMarkets } from '../hooks/useMarkets'
 import { Market, MarketStatus, MarketType, CATEGORIES, formatUsdc } from '../lib/contract'
 
@@ -68,6 +69,8 @@ export default function MarketList() {
           Trade outcome shares with USDC. Markets resolve automatically or via admin — transparent, onchain, instant.
         </p>
       </div>
+
+      <BtcPromo />
 
       {/* Stats bar */}
       {!isLoading && allMarkets.length > 0 && (

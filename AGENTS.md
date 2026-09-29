@@ -91,3 +91,9 @@ bun run dev
   the frontend uses it to switch between onchain comments/editing and the legacy Cloudflare comments.
 - Images: admin uploads go to `/api/image` (KV) and the short URL is stored onchain.
 - Regenerate `docs/remix/PredarcMarketRemix.sol` and the inlined `PREDARC_ABI` in `src/lib/contract.ts` after any contract change.
+
+## Bitcoin Up/Down rounds (`contracts/PredarcBtcRounds.sol`)
+- Separate parimutuel contract: 5-minute (immutable `duration`) rounds, no liquidity needed, auto-settling, 0-fee refunds on ties / one-sided / missed price.
+- Deploy via `docs/remix/PredarcBtcRoundsRemix.sol` (constructor: USDC, feeRecipient, 300, feeBps e.g. 200). No viaIR needed.
+- Add the address per network in Admin → BTC Rounds. Enable/disable, title, home card and all on-chain settings (fee, limits, window, price feed, keepers, fee withdrawal) are editable there.
+- Price source: set a Chainlink BTC/USD feed on the contract (permissionless), or keeper mode: secret `KEEPER_PRIVATE_KEY` (dedicated wallet with a little USDC for gas), authorize it in the admin tab. `POST /api/btc-keeper?network=...` records the boundary price (pinged by visitors' browsers and optionally an external cron each minute).

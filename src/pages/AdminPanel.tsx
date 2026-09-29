@@ -2,7 +2,8 @@ import { useState, useRef, useEffect } from 'react'
 import { useAccount, useSignMessage, useSwitchChain } from 'wagmi'
 import { ConnectKitButton } from 'connectkit'
 import { toast } from 'sonner'
-import { Shield, Plus, Settings, DollarSign, BarChart2, Palette, Save, Upload, RefreshCw, Sparkles } from 'lucide-react'
+import { Shield, Plus, Settings, DollarSign, BarChart2, Palette, Save, Upload, RefreshCw, Sparkles, Bitcoin } from 'lucide-react'
+import BtcAdmin from '../components/admin/BtcAdmin'
 import { Link } from 'react-router-dom'
 import { useAllMarkets, usePlatformFee, useFeeRecipient, useAccruedFees, useContractGuard } from '../hooks/useMarkets'
 import {
@@ -20,7 +21,7 @@ import { parseOnchainError } from '../lib/errors'
 
 function activeAddress() { return getActiveContractAddress(loadConfig()) as `0x${string}` }
 
-type Tab = 'markets' | 'create' | 'fees' | 'branding' | 'config' | 'ai'
+type Tab = 'markets' | 'create' | 'fees' | 'branding' | 'config' | 'ai' | 'btc'
 
 export default function AdminPanel() {
   const { address } = useAccount()
@@ -100,6 +101,7 @@ export default function AdminPanel() {
     { id: 'markets', label: 'Markets', icon: <BarChart2 size={14} /> },
     { id: 'create', label: 'Create', icon: <Plus size={14} /> },
     { id: 'ai', label: 'AI', icon: <Sparkles size={14} /> },
+    { id: 'btc', label: 'BTC Rounds', icon: <Bitcoin size={14} /> },
     { id: 'fees', label: 'Fees', icon: <DollarSign size={14} /> },
     { id: 'branding', label: 'Branding', icon: <Palette size={14} /> },
     { id: 'config', label: 'Config', icon: <Settings size={14} /> },
@@ -133,6 +135,7 @@ export default function AdminPanel() {
       {tab === 'markets' && <MarketsTab />}
       {tab === 'create' && <CreateTab />}
       <div hidden={tab !== 'ai'}><AITab /></div>
+      {tab === 'btc' && <BtcAdmin />}
       {tab === 'fees' && <FeesTab />}
       {tab === 'branding' && <BrandingTab />}
       {tab === 'config' && <ConfigTab />}

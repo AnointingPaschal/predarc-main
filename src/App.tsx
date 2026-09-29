@@ -5,6 +5,7 @@ import MarketList from './pages/MarketList'
 import MarketDetail from './pages/MarketDetail'
 import Portfolio from './pages/Portfolio'
 import AdminPanel from './pages/AdminPanel'
+import BtcRounds from './pages/BtcRounds'
 import { useAccount } from 'wagmi'
 import { useSiteConfig, loadConfig, applyThemeVars, isAdminAddress, useNetwork, getActiveContractAddress } from './lib/adminConfig'
 import { applyTheme } from './lib/theme'
@@ -42,6 +43,7 @@ export default function App() {
           <Routes>
             <Route path="/" element={<MarketList />} />
             <Route path="/market/:id" element={<MarketDetail />} />
+            <Route path="/btc" element={<BtcRounds />} />
             <Route path="/portfolio" element={<Portfolio />} />
             <Route path="/admin" element={<AdminPanel />} />
             <Route path="*" element={<NotFound />} />

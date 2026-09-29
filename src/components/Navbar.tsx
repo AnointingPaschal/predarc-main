@@ -2,14 +2,17 @@ import { useState, useEffect } from 'react'
 import { ConnectKitButton } from 'connectkit'
 import { Link, useLocation } from 'react-router-dom'
 import { BarChart2, Shield, Sun, Moon, Menu, X, TrendingUp, Briefcase } from 'lucide-react'
-import { loadConfig, reapplyThemeVars } from '../lib/adminConfig'
+import { useAccount } from 'wagmi'
+import { useSiteConfig, reapplyThemeVars, isAdminAddress } from '../lib/adminConfig'
 import { getTheme, toggleTheme, type Theme } from '../lib/theme'
 
 export default function Navbar() {
   const location = useLocation()
   const [theme, setThemeState] = useState<Theme>(getTheme)
   const [mobileOpen, setMobileOpen] = useState(false)
-  const config = loadConfig()
+  const config = useSiteConfig()
+  const { address } = useAccount()
+  const isAdmin = isAdminAddress(address, config.adminWallet)
 
   const isActive = (path: string) =>
     path === '/' ? location.pathname === '/' : location.pathname.startsWith(path)
@@ -89,8 +92,8 @@ export default function Navbar() {
               {isDark ? <Sun size={14} strokeWidth={2} /> : <Moon size={14} strokeWidth={2} />}
             </button>
 
-            {/* Admin link (desktop) */}
-            <Link
+            {/* Admin link (desktop) — only rendered for the admin wallet */}
+            {isAdmin && <Link
               to="/admin"
               className="hidden md:flex items-center gap-1.5 h-9 px-3 rounded-xl text-xs font-medium theme-transition"
               style={{
@@ -101,7 +104,7 @@ export default function Navbar() {
             >
               <Shield size={12} strokeWidth={2} />
               Admin
-            </Link>
+            </Link>}
 
             {/* Connect wallet */}
             <ConnectKitButton />
@@ -130,7 +133,7 @@ export default function Navbar() {
           >
             <MobileNavLink to="/" active={isActive('/')} icon={<TrendingUp size={14} />}>Markets</MobileNavLink>
             <MobileNavLink to="/portfolio" active={isActive('/portfolio')} icon={<Briefcase size={14} />}>Portfolio</MobileNavLink>
-            <MobileNavLink to="/admin" active={isActive('/admin')} icon={<Shield size={14} />}>Admin</MobileNavLink>
+            {isAdmin && <MobileNavLink to="/admin" active={isActive('/admin')} icon={<Shield size={14} />}>Admin</MobileNavLink>}
           </div>
         )}
       </nav>

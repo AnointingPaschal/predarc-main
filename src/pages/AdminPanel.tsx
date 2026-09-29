@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { useAccount, useWriteContract as useWriteContractAsync } from 'wagmi'
+import { useAccount, useSignMessage, useWriteContract as useWriteContractAsync } from 'wagmi'
 import { erc20Abi } from 'viem'
 import { PREDARC_ADDRESS, PREDARC_ABI, USDC_ADDRESS } from '../lib/contract'
 import { ConnectKitButton } from 'connectkit'
@@ -12,7 +12,7 @@ import {
 } from '../hooks/useEscrow'
 import { useApproveUsdc } from '../hooks/useEscrow'
 import { Market, MarketStatus, MarketType, formatUsdc, parseUsdc, CATEGORIES } from '../lib/contract'
-import { loadConfig, saveConfig, DEFAULT_CONFIG, DEFAULT_DARK, DEFAULT_LIGHT, SiteConfig, ThemeColors, getActiveContractAddress } from '../lib/adminConfig'
+import { loadConfig, saveConfig, resetConfig, useSiteConfig, isAdminAddress, getAdminSession, signInAsAdmin, DEFAULT_DARK, DEFAULT_LIGHT, SiteConfig, ThemeColors, getActiveContractAddress } from '../lib/adminConfig'
 import { OPENROUTER_MODELS } from '../lib/aiMarkets'
 import AIMarketGenerator from '../components/AIMarketGenerator'
 import type { AIMarketDraft } from '../lib/aiMarkets'
@@ -24,7 +24,59 @@ type Tab = 'markets' | 'create' | 'fees' | 'branding' | 'config' | 'ai'
 
 export default function AdminPanel() {
   const { address } = useAccount()
+  const siteConfig = useSiteConfig()
+  const { signMessageAsync } = useSignMessage()
   const [tab, setTab] = useState<Tab>('markets')
+  const [signing, setSigning] = useState(false)
+  const [, bump] = useState(0)
+  const isAdmin = isAdminAddress(address, siteConfig.adminWallet)
+  const verified = !!address && !!getAdminSession(address)
+
+  async function handleSignIn() {
+    if (!address) return
+    setSigning(true)
+    try {
+      await signInAsAdmin(address, args => signMessageAsync(args))
+      bump(n => n + 1)
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Sign-in failed')
+    } finally {
+      setSigning(false)
+    }
+  }
+
+  if (address && !isAdmin) {
+    // Non-admins get the same page as an unknown route — no hint of what lives here.
+    return (
+      <div className="max-w-md mx-auto px-4 py-24 text-center">
+        <p className="display text-5xl font-700 mb-3" style={{ color: 'var(--surface-strong)' }}>404</p>
+        <p className="font-medium mb-6" style={{ color: 'var(--muted)' }}>Page not found</p>
+        <a href="/" className="inline-flex px-4 py-2 rounded-xl text-sm font-medium" style={{ background: 'var(--accent)', color: 'var(--accent-text)' }}>
+          Back to Markets
+        </a>
+      </div>
+    )
+  }
+
+  if (address && isAdmin && !verified) {
+    return (
+      <div className="max-w-xl mx-auto px-4 py-16 text-center">
+        <Shield size={40} className="mx-auto mb-4" style={{ color: 'var(--accent)' }} />
+        <h1 className="display text-2xl font-600 mb-2" style={{ color: 'var(--ink)' }}>Admin Panel</h1>
+        <p className="text-sm mb-6" style={{ color: 'var(--subtle)' }}>
+          Sign a message with your admin wallet to unlock settings. This costs no gas and is valid for one hour.
+        </p>
+        <button
+          onClick={handleSignIn}
+          disabled={signing}
+          className="px-5 py-2.5 rounded-xl text-sm font-semibold disabled:opacity-50"
+          style={{ background: 'var(--accent)', color: 'var(--accent-text)' }}
+        >
+          {signing ? 'Waiting for signature…' : 'Sign in as admin'}
+        </button>
+      </div>
+    )
+  }
 
   if (!address) {
     return (
@@ -625,9 +677,13 @@ function BrandingTab() {
     reader.readAsDataURL(file)
   }
 
-  const handleSave = () => {
-    saveConfig(config)
-    toast.success('Branding saved and applied!')
+  const handleSave = async () => {
+    try {
+      await saveConfig(config)
+      toast.success('Branding saved to Cloudflare and applied!')
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Save failed')
+    }
   }
 
   return (
@@ -731,53 +787,24 @@ function BrandingTab() {
   )
 }
 
-// Which fields are currently sourced from a Cloudflare env var
-const ENV_SOURCED: Record<string, string> = {
-  contractAddress:        import.meta.env.VITE_CONTRACT_ADDRESS        ? 'VITE_CONTRACT_ADDRESS' : '',
-  testnetContractAddress: import.meta.env.VITE_TESTNET_CONTRACT_ADDRESS ? 'VITE_TESTNET_CONTRACT_ADDRESS' : '',
-  adminWallet:            import.meta.env.VITE_ADMIN_WALLET            ? 'VITE_ADMIN_WALLET' : '',
-  feeRecipient:           import.meta.env.VITE_FEE_RECIPIENT           ? 'VITE_FEE_RECIPIENT' : '',
-  rpcUrl:                 import.meta.env.VITE_RPC_URL                 ? 'VITE_RPC_URL' : '',
-  usdcAddress:            import.meta.env.VITE_USDC_ADDRESS            ? 'VITE_USDC_ADDRESS' : '',
-  chainlinkBtcFeed:       import.meta.env.VITE_CHAINLINK_BTC_FEED      ? 'VITE_CHAINLINK_BTC_FEED' : '',
-  chainlinkEthFeed:       import.meta.env.VITE_CHAINLINK_ETH_FEED      ? 'VITE_CHAINLINK_ETH_FEED' : '',
-}
-
-function EnvBadge({ field }: { field: string }) {
-  const varName = ENV_SOURCED[field]
-  if (!varName) return null
-  return (
-    <span
-      className="ml-2 px-1.5 py-0.5 rounded text-[9px] font-mono font-semibold"
-      style={{ background: 'rgba(99,102,241,0.15)', color: '#818cf8', border: '1px solid rgba(99,102,241,0.3)' }}
-      title={`Value set from Cloudflare env var ${varName}. Edit in Cloudflare Pages → Settings → Environment variables, then redeploy.`}
-    >
-      ENV: {varName}
-    </span>
-  )
-}
-
 function ConfigTab() {
   const [config, setConfig] = useState<SiteConfig>(loadConfig)
 
-  // Re-read on mount so env vars are always reflected
-  useEffect(() => {
-    setConfig(loadConfig())
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
-  const handleSave = () => {
-    saveConfig(config)
-    // Re-read so env overrides are visible immediately after save
-    setConfig(loadConfig())
-    toast.success('Config saved!')
+  const handleSave = async () => {
+    try {
+      await saveConfig(config)
+      setConfig(loadConfig())
+      toast.success('Config saved to Cloudflare!')
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Save failed')
+    }
   }
 
   return (
     <div className="rounded-xl p-5 space-y-4" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
       <h2 className="text-sm font-semibold" style={{ color: 'var(--ink)' }}>Advanced Config</h2>
       <p className="text-xs" style={{ color: 'var(--subtle)' }}>
-        These values are stored in your browser and used to configure the app. For production, set these via environment variables.
+        These values are saved to Cloudflare and apply to every visitor. Only the admin wallet can change them.
       </p>
 
       {/* Network Toggle */}
@@ -816,34 +843,34 @@ function ConfigTab() {
         </div>
       </div>
 
-      <Field label={<span className="flex items-center">Mainnet Contract Address<EnvBadge field="contractAddress" /></span>}>
+      <Field label={<span className="flex items-center">Mainnet Contract Address</span>}>
         <input value={config.contractAddress} onChange={e => setConfig(c => ({ ...c, contractAddress: e.target.value }))} placeholder="0x... (deployed on Arc Mainnet)" className={inputCls + ' mono'} />
       </Field>
-      <Field label={<span className="flex items-center">Testnet Contract Address<EnvBadge field="testnetContractAddress" /></span>}>
+      <Field label={<span className="flex items-center">Testnet Contract Address</span>}>
         <input value={config.testnetContractAddress} onChange={e => setConfig(c => ({ ...c, testnetContractAddress: e.target.value }))} placeholder="0x... (deployed on Arc Testnet)" className={inputCls + ' mono'} />
       </Field>
       <div className="grid grid-cols-2 gap-3">
-        <Field label={<span className="flex items-center">Mainnet RPC URL<EnvBadge field="rpcUrl" /></span>}>
+        <Field label={<span className="flex items-center">Mainnet RPC URL</span>}>
           <input value={config.rpcUrl} onChange={e => setConfig(c => ({ ...c, rpcUrl: e.target.value }))} className={inputCls} />
         </Field>
         <Field label="Min Liquidity (USDC)">
           <input type="number" min={1} step={1} value={config.minLiquidityUsdc} onChange={e => setConfig(c => ({ ...c, minLiquidityUsdc: Math.max(1, parseInt(e.target.value) || 1) }))} className={inputCls + ' tabular-nums'} />
         </Field>
       </div>
-      <Field label={<span className="flex items-center">USDC Address<EnvBadge field="usdcAddress" /></span>}>
+      <Field label={<span className="flex items-center">USDC Address</span>}>
         <input value={config.usdcAddress} onChange={e => setConfig(c => ({ ...c, usdcAddress: e.target.value }))} className={inputCls + ' mono'} />
       </Field>
-      <Field label={<span className="flex items-center">Admin Wallet<EnvBadge field="adminWallet" /></span>}>
-        <input value={config.adminWallet} onChange={e => setConfig(c => ({ ...c, adminWallet: e.target.value }))} placeholder="0x..." className={inputCls + ' mono'} />
+      <Field label={<span className="flex items-center">Admin Wallet</span>}>
+        <input value={config.adminWallet} readOnly title="Set via the ADMIN_WALLET variable in Cloudflare" className={inputCls + ' mono opacity-70'} />
       </Field>
-      <Field label={<span className="flex items-center">Fee Recipient<EnvBadge field="feeRecipient" /></span>}>
+      <Field label={<span className="flex items-center">Fee Recipient</span>}>
         <input value={config.feeRecipient} onChange={e => setConfig(c => ({ ...c, feeRecipient: e.target.value }))} placeholder="0x..." className={inputCls + ' mono'} />
       </Field>
       <div className="grid grid-cols-2 gap-3">
-        <Field label={<span className="flex items-center">Chainlink BTC/USD Feed<EnvBadge field="chainlinkBtcFeed" /></span>}>
+        <Field label={<span className="flex items-center">Chainlink BTC/USD Feed</span>}>
           <input value={config.chainlinkBtcFeed} onChange={e => setConfig(c => ({ ...c, chainlinkBtcFeed: e.target.value }))} placeholder="0x..." className={inputCls + ' mono'} />
         </Field>
-        <Field label={<span className="flex items-center">Chainlink ETH/USD Feed<EnvBadge field="chainlinkEthFeed" /></span>}>
+        <Field label={<span className="flex items-center">Chainlink ETH/USD Feed</span>}>
           <input value={config.chainlinkEthFeed} onChange={e => setConfig(c => ({ ...c, chainlinkEthFeed: e.target.value }))} placeholder="0x..." className={inputCls + ' mono'} />
         </Field>
       </div>
@@ -855,7 +882,7 @@ function ConfigTab() {
           <h3 className="text-sm font-semibold" style={{ color: 'var(--ink)' }}>AI Settings (OpenRouter)</h3>
         </div>
         <p className="text-xs mb-3" style={{ color: 'var(--subtle)' }}>
-          Get a free API key at <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent)' }}>openrouter.ai/keys</a>. Your key is stored only in this browser.
+          Get a free API key at <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent)' }}>openrouter.ai/keys</a>. Your key is stored server-side in Cloudflare and is only ever sent to the admin wallet.
         </p>
         <div className="space-y-3">
           <Field label="OpenRouter API Key">
@@ -933,7 +960,11 @@ function ConfigTab() {
       </button>
 
       <button
-        onClick={() => { localStorage.removeItem('predarc_admin_config'); setConfig(DEFAULT_CONFIG); toast.success('Reset to defaults.') }}
+        onClick={async () => {
+          if (!window.confirm('Delete all saved settings from Cloudflare and reset to defaults?')) return
+          try { await resetConfig(); setConfig(loadConfig()); toast.success('Reset to defaults.') }
+          catch (e) { toast.error(e instanceof Error ? e.message : 'Reset failed') }
+        }}
         className="w-full py-2 rounded-lg text-xs flex items-center justify-center gap-1.5"
         style={{ background: 'transparent', color: 'var(--danger)', border: '1px solid var(--border)' }}
       >

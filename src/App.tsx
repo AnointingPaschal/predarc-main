@@ -5,7 +5,8 @@ import MarketList from './pages/MarketList'
 import MarketDetail from './pages/MarketDetail'
 import Portfolio from './pages/Portfolio'
 import AdminPanel from './pages/AdminPanel'
-import { loadConfig, applyThemeVars } from './lib/adminConfig'
+import { useAccount } from 'wagmi'
+import { useSiteConfig, loadConfig, applyThemeVars, isAdminAddress } from './lib/adminConfig'
 import { applyTheme } from './lib/theme'
 import { TrendingUp } from 'lucide-react'
 
@@ -39,7 +40,9 @@ export default function App() {
 }
 
 function Footer() {
-  const config = loadConfig()
+  const config = useSiteConfig()
+  const { address } = useAccount()
+  const isAdmin = isAdminAddress(address, config.adminWallet)
   return (
     <footer
       className="border-t py-8 theme-transition"
@@ -71,13 +74,15 @@ function Footer() {
                 GitHub
               </a>
             )}
-            <a
-              href="/admin"
-              className="text-xs theme-transition hover:opacity-80"
-              style={{ color: 'var(--subtle)' }}
-            >
-              Admin
-            </a>
+            {isAdmin && (
+              <a
+                href="/admin"
+                className="text-xs theme-transition hover:opacity-80"
+                style={{ color: 'var(--subtle)' }}
+              >
+                Admin
+              </a>
+            )}
           </div>
         </div>
         <div

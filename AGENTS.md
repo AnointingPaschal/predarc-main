@@ -38,12 +38,13 @@ Predarc is a full-featured prediction market platform (like Polymarket) on Arc M
 - `src/hooks/useMarkets.ts` - Contract read hooks
 - `src/hooks/useEscrow.ts` - Contract write hooks
 - `src/lib/contract.ts` - ABI + address + helpers
-- `src/lib/adminConfig.ts` - Admin config (localStorage-backed, CSS vars)
+- `src/lib/adminConfig.ts` - Site config store (in-memory, loaded from Cloudflare KV), admin session, CSS vars
+- `functions/` - Cloudflare Pages Functions: `/api/config` (public) and `/api/admin/config` (admin signature required)
 - `src/config.ts` - wagmi config
 
 ## Admin Panel
 
-Access at `/admin`. Features:
+Access at `/admin`. The Admin link is only rendered when the connected wallet equals the admin wallet; other wallets get a 404 page. The admin signs a free 1-hour session message, and the server verifies it on every request. Features:
 - Markets tab: resolve, cancel, feature markets
 - Create tab: create binary/multiple/scalar markets with Chainlink feed support
 - Fees tab: update fee bps, withdraw accrued fees
@@ -52,7 +53,13 @@ Access at `/admin`. Features:
 
 ## Cloudflare Deploy
 
-This is a Vite static app. Build with `bun run build` and serve `dist/` via Cloudflare Pages.
+Vite app + Pages Functions. Build with `bun run build`, output `dist/`. Setup in Cloudflare Pages:
+
+1. Create a KV namespace and bind it to the project as **`PREDARC_KV`** (Settings → Bindings, both Production and Preview).
+2. Add env var **`ADMIN_WALLET`** = the single admin wallet address (Settings → Variables and Secrets). This is the only source of truth for who is admin.
+3. Redeploy. All admin settings (contract addresses, feeds, branding, OpenRouter key, AI settings) are saved to KV and shared by all visitors. Nothing is stored in browser localStorage. Theme preference uses a cookie.
+
+Local dev with the API: `bun run build && npx wrangler pages dev dist --kv PREDARC_KV --binding ADMIN_WALLET=0x...`
 
 ## Mainnet Deploy Instructions
 

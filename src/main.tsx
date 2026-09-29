@@ -9,6 +9,7 @@ import { ConnectKitProvider } from 'connectkit'
 import { Toaster } from 'sonner'
 import { config } from './config'
 import App from './App'
+import { initConfig } from './lib/adminConfig'
 import './index.css'
 
 const queryClient = new QueryClient()
@@ -103,7 +104,7 @@ function Root() {
   )
 }
 
-createRoot(document.getElementById('root')!).render(
+void initConfig().finally(() => createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <WagmiProvider config={config}>
       <QueryClientProvider client={queryClient}>
@@ -111,4 +112,4 @@ createRoot(document.getElementById('root')!).render(
       </QueryClientProvider>
     </WagmiProvider>
   </StrictMode>,
-)
+))

@@ -1,12 +1,18 @@
-// Theme management — persisted to localStorage, applied via data-theme on <html>
+// Theme management — persisted in a first-party cookie (no localStorage),
+// applied via data-theme on <html>
 export type Theme = 'dark' | 'light'
 
 const KEY = 'predarc_theme'
 
+function readCookie(): Theme | null {
+  const m = document.cookie.match(new RegExp(`(?:^|; )${KEY}=(light|dark)`))
+  return (m?.[1] as Theme | undefined) ?? null
+}
+
 export function getTheme(): Theme {
   try {
-    const stored = localStorage.getItem(KEY) as Theme | null
-    if (stored === 'light' || stored === 'dark') return stored
+    const stored = readCookie()
+    if (stored) return stored
     // System preference fallback
     return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'
   } catch {
@@ -15,7 +21,7 @@ export function getTheme(): Theme {
 }
 
 export function setTheme(theme: Theme): void {
-  localStorage.setItem(KEY, theme)
+  document.cookie = `${KEY}=${theme}; path=/; max-age=31536000; SameSite=Lax`
   document.documentElement.setAttribute('data-theme', theme === 'light' ? 'light' : '')
 }
 

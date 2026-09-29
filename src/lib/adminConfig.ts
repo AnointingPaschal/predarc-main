@@ -1,6 +1,8 @@
-// Admin-configurable site settings
-// Stored in localStorage; in production, back this with a signed server call.
-export const ADMIN_CONFIG_KEY = 'predarc_admin_config'
+// Admin-configurable site settings.
+// Source of truth is Cloudflare KV, served by /api/config (public, no secrets)
+// and /api/admin/config (admin wallet signature required). Nothing is stored in
+// the browser: the config lives in a module-level in-memory cache.
+import { useSyncExternalStore } from 'react'
 
 // Per-mode theme token set
 export interface ThemeColors {
@@ -86,8 +88,8 @@ export const DEFAULT_LIGHT: ThemeColors = {
 }
 
 // Values baked in at build time from Cloudflare environment variables.
-// These become the defaults — localStorage overrides layer on top per-browser.
-// Set these in Cloudflare Pages → Settings → Environment variables.
+// These are only the first-run defaults, used until an admin saves config to
+// Cloudflare KV (saved values win).
 const ENV = {
   contractAddress:        (import.meta.env.VITE_CONTRACT_ADDRESS        as string | undefined) ?? '',
   testnetContractAddress: (import.meta.env.VITE_TESTNET_CONTRACT_ADDRESS as string | undefined) ?? '',
@@ -147,42 +149,131 @@ export function getActiveRpcUrl(config: SiteConfig): string {
   return config.network === 'testnet' ? 'https://rpc.testnet.arc.network' : config.rpcUrl
 }
 
-function applyEnvOverrides(c: SiteConfig): SiteConfig {
-  // Env vars set in Cloudflare always win — they are the cross-device source
-  // of truth. A value is only overridden when the env var is non-empty so that
-  // admins can still clear a field locally via the Config tab if no env var is set.
-  if (ENV.contractAddress)        c.contractAddress        = ENV.contractAddress
-  if (ENV.testnetContractAddress) c.testnetContractAddress = ENV.testnetContractAddress
-  if (ENV.adminWallet)            c.adminWallet            = ENV.adminWallet
-  if (ENV.feeRecipient)           c.feeRecipient           = ENV.feeRecipient
-  if (ENV.rpcUrl)                 c.rpcUrl                 = ENV.rpcUrl
-  if (ENV.usdcAddress)            c.usdcAddress            = ENV.usdcAddress
-  if (ENV.chainlinkBtcFeed)       c.chainlinkBtcFeed       = ENV.chainlinkBtcFeed
-  if (ENV.chainlinkEthFeed)       c.chainlinkEthFeed       = ENV.chainlinkEthFeed
-  if (ENV.network === 'testnet' || ENV.network === 'mainnet') c.network = ENV.network
-  return c
-}
-
-export function loadConfig(): SiteConfig {
-  try {
-    const raw = localStorage.getItem(ADMIN_CONFIG_KEY)
-    if (!raw) return applyEnvOverrides({ ...DEFAULT_CONFIG })
-    const parsed = JSON.parse(raw) as Partial<SiteConfig>
-    const merged: SiteConfig = {
-      ...DEFAULT_CONFIG,
-      ...parsed,
-      darkTheme:  { ...DEFAULT_DARK,  ...(parsed.darkTheme  ?? {}) },
-      lightTheme: { ...DEFAULT_LIGHT, ...(parsed.lightTheme ?? {}) },
-    }
-    return applyEnvOverrides(merged)
-  } catch {
-    return applyEnvOverrides({ ...DEFAULT_CONFIG })
+function mergeConfig(parsed: Partial<SiteConfig> | null | undefined): SiteConfig {
+  const p = parsed ?? {}
+  return {
+    ...DEFAULT_CONFIG,
+    ...p,
+    darkTheme:  { ...DEFAULT_DARK,  ...(p.darkTheme  ?? {}) },
+    lightTheme: { ...DEFAULT_LIGHT, ...(p.lightTheme ?? {}) },
   }
 }
 
-export function saveConfig(config: SiteConfig): void {
-  localStorage.setItem(ADMIN_CONFIG_KEY, JSON.stringify(config))
-  applyThemeVars(config)
+// ── In-memory store ──────────────────────────────────────────────────────────
+let current: SiteConfig = mergeConfig(null)
+const listeners = new Set<() => void>()
+
+function setCurrent(c: SiteConfig) {
+  current = c
+  listeners.forEach(l => l())
+}
+
+export function subscribeConfig(cb: () => void): () => void {
+  listeners.add(cb)
+  return () => { listeners.delete(cb) }
+}
+
+/** Synchronous read of the current in-memory config. */
+export function loadConfig(): SiteConfig {
+  return current
+}
+
+/** React hook: re-renders when the config changes. */
+export function useSiteConfig(): SiteConfig {
+  return useSyncExternalStore(subscribeConfig, loadConfig, loadConfig)
+}
+
+/** Fetch the public config from Cloudflare. Never throws; falls back to defaults. */
+export async function initConfig(): Promise<SiteConfig> {
+  try {
+    const res = await fetch('/api/config', { cache: 'no-store', signal: AbortSignal.timeout(4000) })
+    if (res.ok) {
+      const data = (await res.json()) as { config?: Partial<SiteConfig> }
+      setCurrent(mergeConfig(data.config))
+    }
+  } catch { /* offline / local dev without functions: keep defaults */ }
+  applyThemeVars(current)
+  return current
+}
+
+// ── Admin session (in memory only) ───────────────────────────────────────────
+export interface AdminSession { address: string; message: string; signature: string; expires: number }
+let session: AdminSession | null = null
+
+export function getAdminSession(address?: string): AdminSession | null {
+  if (!session || session.expires < Date.now() + 30_000) return null
+  if (address && session.address !== address.toLowerCase()) return null
+  return session
+}
+
+export function clearAdminSession(): void { session = null }
+
+export function isAdminAddress(address: string | undefined, adminWallet: string | undefined): boolean {
+  return !!address && !!adminWallet && address.toLowerCase() === adminWallet.trim().toLowerCase()
+}
+
+/** Ask the admin wallet to sign a 1-hour session message, then load the full config. */
+export async function signInAsAdmin(
+  address: string,
+  signMessage: (args: { message: string }) => Promise<string>,
+): Promise<void> {
+  const issued = Date.now()
+  const expires = issued + 60 * 60 * 1000
+  const message = [
+    'Predarc admin session',
+    `Address: ${address.toLowerCase()}`,
+    `Host: ${window.location.host}`,
+    `Issued: ${issued}`,
+    `Expires: ${expires}`,
+  ].join('\n')
+  const signature = await signMessage({ message })
+  session = { address: address.toLowerCase(), message, signature, expires }
+  await fetchAdminConfig()
+}
+
+function adminHeaders(): Record<string, string> {
+  const s = getAdminSession()
+  if (!s) throw new Error('Admin session expired. Please sign in again.')
+  return {
+    'x-admin-address': s.address,
+    'x-admin-message': btoa(String.fromCharCode(...new TextEncoder().encode(s.message))),
+    'x-admin-signature': s.signature,
+  }
+}
+
+async function apiError(res: Response): Promise<Error> {
+  const body = (await res.json().catch(() => ({}))) as { error?: string }
+  return new Error(body.error || `Request failed (${res.status})`)
+}
+
+/** Load the full config (including secrets) — admin only. */
+export async function fetchAdminConfig(): Promise<SiteConfig> {
+  const res = await fetch('/api/admin/config', { headers: adminHeaders(), cache: 'no-store' })
+  if (!res.ok) { if (res.status === 401) session = null; throw await apiError(res) }
+  const data = (await res.json()) as { config?: Partial<SiteConfig> }
+  setCurrent(mergeConfig(data.config))
+  applyThemeVars(current)
+  return current
+}
+
+/** Save config to Cloudflare KV (admin signature required) and apply it. */
+export async function saveConfig(config: SiteConfig): Promise<void> {
+  const res = await fetch('/api/admin/config', {
+    method: 'PUT',
+    headers: { ...adminHeaders(), 'content-type': 'application/json' },
+    body: JSON.stringify(config),
+  })
+  if (!res.ok) { if (res.status === 401) session = null; throw await apiError(res) }
+  setCurrent(mergeConfig(config))
+  applyThemeVars(current)
+}
+
+/** Delete saved config from Cloudflare KV, returning to defaults. */
+export async function resetConfig(): Promise<void> {
+  const res = await fetch('/api/admin/config', { method: 'DELETE', headers: adminHeaders() })
+  if (!res.ok) throw await apiError(res)
+  setCurrent(mergeConfig(null))
+  applyThemeVars(current)
 }
 
 // Apply the right set of CSS vars based on current theme mode
@@ -193,21 +284,9 @@ export function applyThemeVars(config: SiteConfig): void {
   applyCustomCss(config.customCss)
 }
 
-// Called on theme mode toggle so stored colors re-apply to the new mode
+// Called on theme mode toggle so configured colors re-apply to the new mode
 export function reapplyThemeVars(): void {
-  const raw = localStorage.getItem(ADMIN_CONFIG_KEY)
-  if (!raw) return
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-    const parsed = JSON.parse(raw)
-    const config: SiteConfig = {
-      ...DEFAULT_CONFIG,
-      ...(parsed as Partial<SiteConfig>),
-      darkTheme:  { ...DEFAULT_DARK,  ...((parsed as Partial<SiteConfig>).darkTheme  ?? {}) },
-      lightTheme: { ...DEFAULT_LIGHT, ...((parsed as Partial<SiteConfig>).lightTheme ?? {}) },
-    }
-    applyThemeVars(config)
-  } catch { /* ignore */ }
+  applyThemeVars(current)
 }
 
 function applyColorSet(t: ThemeColors): void {

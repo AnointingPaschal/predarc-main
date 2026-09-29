@@ -1,0 +1,107 @@
+// Shared helpers for Cloudflare Pages Functions.
+// Storage: one Workers KV namespace bound as PREDARC_KV.
+//   config:public  -> site config served to everyone (no secrets)
+//   config:secret  -> admin-only secrets (OpenRouter API key)
+import { verifyMessage, isAddress } from 'viem'
+
+export interface KVNamespaceLike {
+  get(key: string): Promise<string | null>
+  put(key: string, value: string): Promise<void>
+  delete(key: string): Promise<void>
+}
+
+export interface Env {
+  PREDARC_KV: KVNamespaceLike
+  // The single admin wallet. Set as a Cloudflare env var / secret.
+  ADMIN_WALLET?: string
+  VITE_ADMIN_WALLET?: string
+}
+
+export const PUBLIC_KEY = 'config:public'
+export const SECRET_KEY = 'config:secret'
+export const MAX_BODY_BYTES = 2_000_000 // logo is stored as a data URL
+export const SESSION_MAX_MS = 60 * 60 * 1000 // admin session lifetime: 1 hour
+
+// Fields that must never leave the server on the public endpoint.
+export const SECRET_FIELDS = ['openrouterApiKey'] as const
+
+export function json(data: unknown, status = 200, extra: Record<string, string> = {}): Response {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: { 'content-type': 'application/json', 'cache-control': 'no-store', ...extra },
+  })
+}
+
+export function adminWalletOf(env: Env): string {
+  return (env.ADMIN_WALLET || env.VITE_ADMIN_WALLET || '').trim().toLowerCase()
+}
+
+export function checkStorage(env: Env): Response | null {
+  return env.PREDARC_KV
+    ? null
+    : json({ error: 'KV namespace PREDARC_KV is not bound. Add it in Cloudflare Pages → Settings → Bindings.' }, 500)
+}
+
+/**
+ * Verifies the admin session headers sent by the browser:
+ *   x-admin-address, x-admin-message (base64), x-admin-signature
+ * The message is signed once by the admin wallet (personal_sign) and reused for
+ * up to an hour. It is bound to this host and carries issue/expiry times.
+ * Returns null when valid, or an error Response.
+ */
+export async function requireAdmin(request: Request, env: Env): Promise<Response | null> {
+  const admin = adminWalletOf(env)
+  if (!admin || !isAddress(admin)) {
+    return json({ error: 'ADMIN_WALLET is not configured on the server.' }, 500)
+  }
+  const address = (request.headers.get('x-admin-address') || '').toLowerCase()
+  const b64 = request.headers.get('x-admin-message') || ''
+  const signature = request.headers.get('x-admin-signature') || ''
+  if (!address || !b64 || !signature) return json({ error: 'Admin signature required.' }, 401)
+  if (address !== admin) return json({ error: 'Not the admin wallet.' }, 403)
+
+  let message: string
+  try {
+    message = new TextDecoder().decode(Uint8Array.from(atob(b64), c => c.charCodeAt(0)))
+  } catch {
+    return json({ error: 'Bad message encoding.' }, 400)
+  }
+
+  const field = (name: string) => new RegExp(`^${name}: (.+)$`, 'm').exec(message)?.[1]?.trim()
+  const msgAddr = field('Address')?.toLowerCase()
+  const host = field('Host')
+  const issued = Number(field('Issued'))
+  const expires = Number(field('Expires'))
+  const now = Date.now()
+
+  if (!message.startsWith('Predarc admin session')) return json({ error: 'Bad message.' }, 400)
+  if (msgAddr !== admin) return json({ error: 'Message address mismatch.' }, 403)
+  if (host !== new URL(request.url).host) return json({ error: 'Message is for another host.' }, 403)
+  if (!Number.isFinite(issued) || !Number.isFinite(expires)) return json({ error: 'Bad timestamps.' }, 400)
+  if (issued > now + 60_000 || expires < now || expires - issued > SESSION_MAX_MS) {
+    return json({ error: 'Admin session expired. Sign again.' }, 401)
+  }
+
+  try {
+    const ok = await verifyMessage({
+      address: admin as `0x${string}`,
+      message,
+      signature: signature as `0x${string}`,
+    })
+    if (!ok) return json({ error: 'Invalid signature.' }, 403)
+  } catch {
+    return json({ error: 'Invalid signature.' }, 403)
+  }
+  return null
+}
+
+export async function readJson(env: Env, key: string): Promise<Record<string, unknown>> {
+  const raw = await env.PREDARC_KV.get(key)
+  if (!raw) return {}
+  try {
+    const v = JSON.parse(raw) as unknown
+    return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {}
+  } catch {
+    return {}
+  }
+}

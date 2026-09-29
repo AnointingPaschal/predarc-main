@@ -29,6 +29,7 @@ export interface NetworkSettings {
   feeRecipient: string
   chainlinkBtcFeed: string
   chainlinkEthFeed: string
+  deployBlock?: number // optional: block the contract was deployed at (speeds up history)
   minLiquidityUsdc: number // UI-side minimum for market creation (the contract enforces its own)
 }
 
@@ -129,7 +130,7 @@ export const DEFAULT_CONFIG: SiteConfig = {
     feeRecipient:     ENV.feeRecipient,
     chainlinkBtcFeed: ENV.chainlinkBtcFeed,
     chainlinkEthFeed: ENV.chainlinkEthFeed,
-    minLiquidityUsdc: 10, // matches the contract's built-in default
+    minLiquidityUsdc: 1,
   },
   testnet: {
     contractAddress:  ENV.testnetContractAddress,
@@ -138,7 +139,7 @@ export const DEFAULT_CONFIG: SiteConfig = {
     feeRecipient:     ENV.feeRecipient,
     chainlinkBtcFeed: '',
     chainlinkEthFeed: '',
-    minLiquidityUsdc: 10,
+    minLiquidityUsdc: 1,
   },
   adminWallet: ENV.adminWallet,
   openrouterApiKey: '',
@@ -279,7 +280,7 @@ function noteServerTime(t: unknown, res?: Response) {
   const server = Number.isFinite(fromBody) ? fromBody : hdr ? Date.parse(hdr) : NaN
   if (Number.isFinite(server)) clockSkew = server - Date.now()
 }
-const serverNow = () => Date.now() + clockSkew
+export const serverNow = () => Date.now() + clockSkew
 
 // ── Admin session (in memory only) ───────────────────────────────────────────
 export interface AdminSession { address: string; message: string; signature: string; expires: number }
@@ -315,6 +316,8 @@ function makeHeaders(s: AdminSession): Record<string, string> {
     'x-admin-signature': s.signature,
   }
 }
+
+export function adminAuthHeaders(): Record<string, string> { return adminHeaders() }
 
 function adminHeaders(): Record<string, string> {
   const s = getAdminSession()

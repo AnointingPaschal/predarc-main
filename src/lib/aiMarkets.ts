@@ -1,5 +1,6 @@
 // AI Market Generation via OpenRouter
 // Calls the OpenRouter API with the admin-configured key and model
+import { fetchNews, type NewsItem } from './api'
 
 export interface AIMarketDraft {
   question: string
@@ -13,6 +14,9 @@ export interface AIMarketDraft {
   rationale: string               // AI's reasoning
   suggestedLiquidity: number      // USDC
   suggestedDurationDays: number
+  resolutionCriteria: string      // exactly how/when this resolves
+  sources: { title: string; url: string }[]  // where to verify the outcome
+  sourceHeadline?: string         // news headline that inspired it
 }
 
 export type AIGenerateMode =
@@ -46,62 +50,108 @@ Rules:
 - Make questions specific with timeframes (e.g. "by end of Q4 2026", "before December 31 2026")
 - Categories: Crypto, Sports, Politics, Entertainment, Science, Finance, Other
 
+- Always include resolutionCriteria (precise, with the data source and cutoff time) and 1-3 real, well-known source URLs (official sites, exchanges, league sites) used to verify the outcome
+- Never generate two markets about the same subject, and vary subjects, category and phrasing widely between batches
+
 You MUST respond with valid JSON only. No markdown, no explanation outside the JSON.`
 
-function buildPrompt(opts: AIGenerateOptions): string {
-  const avoid = opts.avoid?.length ? `\nDo NOT repeat or closely paraphrase any of these existing questions:\n${opts.avoid.slice(-30).map(q => `- ${q}`).join('\n')}\n` : ''
-  return buildPromptCore(opts) + avoid
+// ── Rotation: every run gets a different mix of categories, angles and headlines ──
+
+const ALL_CATEGORIES = ['Crypto', 'Sports', 'Politics', 'Entertainment', 'Science', 'Finance', 'Other']
+const TOPIC_FOR_CATEGORY: Record<string, string> = {
+  Crypto: 'crypto', Sports: 'sports', Politics: 'politics', Entertainment: 'entertainment',
+  Science: 'science', Finance: 'economy', Other: 'world',
+}
+const ANGLES = [
+  'a price or numeric threshold being crossed by a date',
+  'who wins a specific upcoming contest, vote or award',
+  'whether a specific announced event actually happens on schedule',
+  'a head-to-head comparison between two named entities',
+  'a scalar question about a measurable number (count, price, percentage)',
+  'whether an official body will approve, ban, or pass something',
+  'a "first to" or "will X happen before Y" race',
+  'an under-the-radar niche story that few people are watching',
+  'a contrarian question where the obvious answer is not certain',
+  'a multiple-choice question with 4-6 realistic candidates',
+]
+
+const shuffle = <T,>(a: T[]): T[] => {
+  const r = [...a]
+  for (let i = r.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [r[i], r[j]] = [r[j], r[i]] }
+  return r
 }
 
-function buildPromptCore(opts: AIGenerateOptions): string {
+const STOP = new Set(['will', 'the', 'a', 'an', 'of', 'to', 'in', 'on', 'by', 'be', 'or', 'and', 'for', 'at', 'is', 'before', 'after', 'than', 'that', 'this', 'with', 'from', 'end', 'above', 'below', 'over', 'under', 'more', 'less', 'least', 'exceed', 'reach', 'win', 'yes', 'no'])
+const tokens = (q: string) => new Set(q.toLowerCase().replace(/[^a-z0-9$%. ]/g, ' ').split(/\s+/).filter(w => w.length > 1 && !STOP.has(w)))
+function similarity(a: string, b: string): number {
+  const A = tokens(a), B = tokens(b)
+  if (!A.size || !B.size) return 0
+  let inter = 0; A.forEach(t => { if (B.has(t)) inter++ })
+  return inter / Math.min(A.size, B.size)
+}
+/** Questions this browser session has already generated, so consecutive runs never repeat. */
+const generatedThisSession: string[] = []
+const isDuplicate = (q: string, pool: string[]) => pool.some(p => similarity(q, p) >= 0.6)
+
+async function gatherHeadlines(categories: string[]): Promise<{ category: string; item: NewsItem }[]> {
+  const picked = shuffle(categories).slice(0, 4)
+  const lists = await Promise.all(picked.map(async c => ({ c, items: await fetchNews({ topic: TOPIC_FOR_CATEGORY[c] ?? 'world' }) })))
+  const out: { category: string; item: NewsItem }[] = []
+  for (const { c, items } of lists) for (const item of shuffle(items).slice(0, 5)) out.push({ category: c, item })
+  return shuffle(out)
+}
+
+interface PromptBits { headlines: { category: string; item: NewsItem }[]; categories: string[]; angles: string[]; nonce: string }
+
+function buildPrompt(opts: AIGenerateOptions, bits: PromptBits, avoid: string[]): string {
   const types = opts.marketTypes ?? ['binary', 'multiple', 'scalar']
-  const typeHint = types.join(', ')
+  const count = opts.mode === 'topic' ? 1 : opts.count ?? 5
+  const today = new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
+  const avoidBlock = avoid.length
+    ? `\nALREADY EXISTS — do NOT repeat, paraphrase, or create a variation of any of these (different subject entirely):\n${avoid.slice(-60).map(q => `- ${q}`).join('\n')}\n`
+    : ''
 
+  let source = ''
   if (opts.mode === 'topic') {
-    return `Generate 1 prediction market about: "${opts.topic ?? 'general'}"
-Market types to consider: ${typeHint}
-Return a JSON array with exactly 1 item matching this schema:
-${SCHEMA_HINT}`
+    source = `Topic: "${opts.topic ?? 'general'}"`
+  } else if (opts.mode === 'news' && opts.newsContext?.trim()) {
+    source = `Base the markets on these headlines / context supplied by the admin:\n${opts.newsContext}`
+  } else if (bits.headlines.length) {
+    source = `Today is ${today}. Fresh real headlines (pick DIFFERENT ones — each market must come from a different headline, and skip any that are stale or already covered):\n` +
+      bits.headlines.slice(0, 14).map((h, i) => `${i + 1}. [${h.category}] ${h.item.title}${h.item.source ? ` — ${h.item.source}` : ''}`).join('\n')
+  } else {
+    source = `Today is ${today}. Use your knowledge of current world events.`
   }
 
-  if (opts.mode === 'news') {
-    return `Based on these recent events/headlines, generate ${opts.count ?? 5} prediction markets:
+  return `${source}
 
-${opts.newsContext ?? 'Recent crypto, sports, and world events'}
-
-Spread across categories: ${(opts.categories ?? ['Crypto', 'Sports', 'Politics']).join(', ')}
-Market types to use: ${typeHint}
-Return a JSON array with ${opts.count ?? 5} items matching this schema:
+Generate ${count} prediction market${count > 1 ? 's' : ''}.
+Categories to draw from (vary them; do not use one category for everything): ${bits.categories.join(', ')}
+Market types allowed: ${types.join(', ')}
+Angles to use (one per market, in this order): ${bits.angles.slice(0, count).join(' | ')}
+Every market must resolve in the future (suggestedDurationDays between 3 and 180) and be objectively resolvable from a public source.
+Variety token (ignore, just make this batch unlike previous ones): ${bits.nonce}
+${avoidBlock}
+Return a JSON object {"markets": [...]} with ${count} items, each matching this schema:
 ${SCHEMA_HINT}`
-  }
-
-  if (opts.mode === 'batch' || opts.mode === 'auto') {
-    return `Generate ${opts.count ?? 5} diverse prediction markets.
-Categories to cover: ${(opts.categories ?? ['Crypto', 'Sports', 'Politics', 'Finance', 'Entertainment']).join(', ')}
-Market types to use: ${typeHint}
-Make markets relevant to current world events as of ${new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}. Use end dates in the future.
-Return a JSON array with ${opts.count ?? 5} items matching this schema:
-${SCHEMA_HINT}`
-  }
-
-  return `Generate 3 prediction markets. Return JSON array. ${SCHEMA_HINT}`
 }
 
-const SCHEMA_HINT = `[
-  {
-    "question": "Will BTC exceed $100,000 by December 31 2026?",
-    "marketType": 0,
-    "outcomes": ["Yes", "No"],
-    "category": "Crypto",
-    "imageUrl": "",
-    "scalarLow": 0,
-    "scalarHigh": 0,
-    "scalarUnit": "",
-    "rationale": "Bitcoin has been approaching all-time highs...",
-    "suggestedLiquidity": 100,
-    "suggestedDurationDays": 90
-  }
-]`
+const SCHEMA_HINT = `{
+  "question": "Will BTC close above $120,000 on any day before December 31 2026?",
+  "marketType": 0,
+  "outcomes": ["Yes", "No"],
+  "category": "Crypto",
+  "imageUrl": "",
+  "scalarLow": 0,
+  "scalarHigh": 0,
+  "scalarUnit": "",
+  "rationale": "2-3 sentences: why this market matters now and what the current situation is",
+  "resolutionCriteria": "Resolves Yes if CoinGecko's daily close for BTC/USD is above $120,000 on any UTC day up to and including Dec 31 2026. Otherwise No.",
+  "sources": [{"title": "CoinGecko BTC price history", "url": "https://www.coingecko.com/en/coins/bitcoin/historical_data"}],
+  "sourceHeadline": "headline that inspired this, or empty",
+  "suggestedLiquidity": 100,
+  "suggestedDurationDays": 90
+}`
 
 
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1'
@@ -204,49 +254,74 @@ export async function testOpenRouterConnection(apiKey: string, model: string): P
   return steps
 }
 
-export async function generateMarkets(opts: AIGenerateOptions): Promise<AIMarketDraft[]> {
-  if (!opts.apiKey) throw new Error('OpenRouter API key is not configured. Add it in Admin → Config → AI Settings.')
-  if (!opts.model) throw new Error('No AI model selected. Add one in Admin → Config → AI Settings.')
-
-  const prompt = buildPrompt(opts)
-  const content = await chat(opts.apiKey, opts.model, [
-    { role: 'system', content: SYSTEM_PROMPT },
-    { role: 'user', content: prompt },
-  ], { temperature: 0.8, maxTokens: 4000, json: true })
-
+function parseDrafts(content: string): AIMarketDraft[] {
   const parsed = extractJson(content)
   if (parsed === undefined) throw new Error('AI returned invalid JSON. Try again or use a different model.')
-
   let markets: unknown[]
-  if (Array.isArray(parsed)) {
-    markets = parsed
-  } else if (parsed && typeof parsed === 'object') {
-    // find the first array property
+  if (Array.isArray(parsed)) markets = parsed
+  else if (parsed && typeof parsed === 'object') {
     const firstArr = Object.values(parsed as Record<string, unknown>).find(v => Array.isArray(v))
     if (!firstArr) throw new Error('AI response did not contain a markets array.')
     markets = firstArr as unknown[]
-  } else {
-    throw new Error('AI response format not recognized.')
-  }
+  } else throw new Error('AI response format not recognized.')
 
+  const str = (v: unknown, fallback = ''): string =>
+    v === null || v === undefined || typeof v === 'object' ? fallback : `${v as string | number | boolean}`
   return markets.map((m): AIMarketDraft => {
     const raw = m as Record<string, unknown>
-    const str = (v: unknown, fallback = ''): string =>
-      v === null || v === undefined || typeof v === 'object' ? fallback : `${v as string | number | boolean}`
+    const type = Number(raw.marketType ?? 0)
     return {
-      question: str(raw.question),
-      marketType: (Number(raw.marketType ?? 0)) as 0 | 1 | 2,
-      outcomes: Array.isArray(raw.outcomes) ? (raw.outcomes as unknown[]).map(v => str(v)) : ['Yes', 'No'],
-      category: str(raw.category, 'Other'),
+      question: str(raw.question).trim(),
+      marketType: (type === 1 || type === 2 ? type : 0) as 0 | 1 | 2,
+      outcomes: Array.isArray(raw.outcomes) ? (raw.outcomes as unknown[]).map(v => str(v)).filter(Boolean) : ['Yes', 'No'],
+      category: ALL_CATEGORIES.includes(str(raw.category)) ? str(raw.category) : 'Other',
       imageUrl: str(raw.imageUrl),
       scalarLow: Number(raw.scalarLow ?? 0),
       scalarHigh: Number(raw.scalarHigh ?? 100),
       scalarUnit: str(raw.scalarUnit),
       rationale: str(raw.rationale),
-      suggestedLiquidity: Math.max(10, Number(raw.suggestedLiquidity ?? 100)),
+      suggestedLiquidity: Math.max(1, Number(raw.suggestedLiquidity ?? 100)),
       suggestedDurationDays: Math.max(1, Number(raw.suggestedDurationDays ?? 30)),
+      resolutionCriteria: str(raw.resolutionCriteria),
+      sources: Array.isArray(raw.sources)
+        ? (raw.sources as Record<string, unknown>[]).map(x => ({ title: str(x?.title), url: str(x?.url) })).filter(x => /^https?:\/\//.test(x.url)).slice(0, 4)
+        : [],
+      sourceHeadline: str(raw.sourceHeadline) || undefined,
     }
-  }).filter(m => m.question.length > 0)
+  }).filter(m => m.question.length > 0 && m.outcomes.length >= 2)
+}
+
+export async function generateMarkets(opts: AIGenerateOptions): Promise<AIMarketDraft[]> {
+  if (!opts.apiKey) throw new Error('OpenRouter API key is not configured. Add it in Admin → Config → AI Settings.')
+  if (!opts.model) throw new Error('No AI model selected. Add one in Admin → Config → AI Settings.')
+
+  const want = opts.mode === 'topic' ? 1 : opts.count ?? 5
+  const avoid = [...new Set([...(opts.avoid ?? []), ...generatedThisSession])]
+  const pool = opts.categories?.length ? opts.categories : ALL_CATEGORIES
+  const results: AIMarketDraft[] = []
+
+  // Up to 2 attempts: the second one runs with everything rejected added to the avoid list.
+  for (let attempt = 0; attempt < 2 && results.length < want; attempt++) {
+    const useNews = opts.mode === 'auto' || opts.mode === 'batch' || (opts.mode === 'news' && !opts.newsContext?.trim())
+    const bits: PromptBits = {
+      headlines: useNews ? await gatherHeadlines(pool) : [],
+      categories: shuffle(pool).slice(0, Math.max(3, Math.min(pool.length, want))),
+      angles: shuffle(ANGLES),
+      nonce: Math.random().toString(36).slice(2, 10),
+    }
+    const content = await chat(opts.apiKey, opts.model, [
+      { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'user', content: buildPrompt({ ...opts, count: want - results.length }, bits, [...avoid, ...results.map(r => r.question)]) },
+    ], { temperature: 1, maxTokens: 5000, json: true })
+
+    for (const d of parseDrafts(content)) {
+      if (results.length >= want) break
+      if (isDuplicate(d.question, [...avoid, ...results.map(r => r.question)])) { avoid.push(d.question); continue }
+      results.push(d)
+    }
+  }
+  results.forEach(r => generatedThisSession.push(r.question))
+  return results
 }
 
 // Popular OpenRouter models to show in the dropdown
@@ -261,3 +336,42 @@ export const OPENROUTER_MODELS = [
   { id: 'mistralai/mistral-small-3.1-24b-instruct', label: 'Mistral Small 3.1' },
   { id: 'deepseek/deepseek-chat-v3-0324', label: 'DeepSeek V3 (very cheap)' },
 ]
+
+// ── Per-market AI analysis ───────────────────────────────────────────────────
+
+export async function generateAnalysis(o: {
+  apiKey: string; model: string; question: string; outcomes: string[]; prices: number[]
+  endsAt: Date; resolutionCriteria?: string; liquidityUsd: number; volumeUsd: number
+}): Promise<import('./api').AIAnalysis> {
+  if (!o.apiKey) throw new Error('OpenRouter API key is not configured. Add it in Admin → Config → AI Settings.')
+  const keywords = o.question.replace(/[^\w\s$%.-]/g, ' ').split(/\s+/).filter(w => w.length > 3).slice(0, 8).join(' ')
+  const news = await fetchNews({ q: keywords })
+  const headlines = news.slice(0, 10).map(n => `- ${n.title}${n.source ? ` (${n.source})` : ''}`).join('\n') || '(no fresh headlines found)'
+  const market = o.outcomes.map((n, i) => `${n}: ${(o.prices[i] * 100).toFixed(1)}%`).join(', ')
+  const content = await chat(o.apiKey, o.model, [
+    { role: 'system', content: 'You are a rigorous forecasting analyst for a prediction market. Be concrete, cite the evidence you are given, avoid hype, and never claim certainty. Respond with valid JSON only.' },
+    { role: 'user', content: `Analyze this prediction market.
+Question: ${o.question}
+Outcomes and current market-implied probabilities: ${market}
+Pool liquidity: $${o.liquidityUsd.toFixed(2)} · traded volume: $${o.volumeUsd.toFixed(2)}
+Trading ends: ${o.endsAt.toUTCString()}
+Resolution criteria: ${o.resolutionCriteria || '(not specified)'}
+Today: ${new Date().toUTCString()}
+
+Recent headlines:
+${headlines}
+
+Return JSON:
+{"summary": "2-3 sentence overview", "reasoning": ["4-6 step-by-step reasoning points"], "bullCase": ["2-4 reasons the first outcome is likely"], "bearCase": ["2-4 reasons against"], "risks": ["2-4 key uncertainties or resolution risks"], "probabilities": [{"outcome": "<exact outcome name>", "probability": 0.0}], "confidence": "low|medium|high"}
+Probabilities must cover every outcome and sum to 1.` },
+  ], { temperature: 0.4, maxTokens: 2500, json: true })
+  const j = extractJson(content) as Record<string, unknown> | undefined
+  if (!j || typeof j !== 'object') throw new Error('AI returned invalid JSON. Try again or use a different model.')
+  const list = (v: unknown) => (Array.isArray(v) ? v.map(x => String(x)).filter(Boolean) : [])
+  const probs = Array.isArray(j.probabilities) ? (j.probabilities as Record<string, unknown>[]).map(p => ({ outcome: String(p.outcome ?? ''), probability: Math.max(0, Math.min(1, Number(p.probability) || 0)) })) : []
+  return {
+    summary: String(j.summary ?? ''), reasoning: list(j.reasoning), bullCase: list(j.bullCase), bearCase: list(j.bearCase), risks: list(j.risks),
+    probabilities: probs, confidence: (['low', 'medium', 'high'].includes(String(j.confidence)) ? j.confidence : 'medium') as 'low' | 'medium' | 'high',
+    model: o.model, generatedAt: Date.now(),
+  }
+}

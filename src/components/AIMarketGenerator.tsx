@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { Sparkles, RefreshCw, ChevronDown, ChevronUp, Zap, Newspaper, List, Bot, Check, X, Rocket } from 'lucide-react'
 import { toast } from 'sonner'
+import { useAllMarkets } from '../hooks/useMarkets'
 import { generateMarkets, AIMarketDraft, AIGenerateMode, OPENROUTER_MODELS } from '../lib/aiMarkets'
 import { useSiteConfig } from '../lib/adminConfig'
 import { CATEGORIES } from '../lib/contract'
@@ -45,6 +46,10 @@ export default function AIMarketGenerator({ onUseMarket, onPublishAll }: AIMarke
   // always needs the admin's wallet signature, so nothing is sent onchain here.
   const draftsRef = useRef<AIMarketDraft[]>([])
   draftsRef.current = drafts
+  // Questions already onchain — the AI must never regenerate these
+  const { data: onchainRaw } = useAllMarkets()
+  const onchainRef = useRef<string[]>([])
+  onchainRef.current = ((onchainRaw as { question: string }[] | undefined) ?? []).map(m => m.question)
   const [autoStatus, setAutoStatus] = useState('')
   useEffect(() => {
     if (!config.aiAutoGenEnabled || !hasKey) { setAutoStatus(''); return }
@@ -59,7 +64,7 @@ export default function AIMarketGenerator({ onUseMarket, onPublishAll }: AIMarke
         const results = await generateMarkets({
           mode: 'auto', count: 3,
           categories: cats.length ? cats : undefined,
-          avoid: draftsRef.current.map(d => d.question),
+          avoid: [...onchainRef.current, ...draftsRef.current.map(d => d.question)],
           apiKey: config.openrouterApiKey,
           model: config.openrouterModel || 'openai/gpt-4o-mini',
         })
@@ -72,9 +77,10 @@ export default function AIMarketGenerator({ onUseMarket, onPublishAll }: AIMarke
         setAutoStatus(`Auto-run failed: ${e instanceof Error ? e.message : 'unknown error'}`)
       } finally { running = false }
     }
-    setAutoStatus(`Auto-gen on · first run in ${minutes} min`)
+    setAutoStatus('Auto-gen on · first run in a few seconds')
+    const first = window.setTimeout(() => { void run() }, 8_000)
     const id = window.setInterval(() => { void run() }, minutes * 60_000)
-    return () => { cancelled = true; window.clearInterval(id) }
+    return () => { cancelled = true; window.clearTimeout(first); window.clearInterval(id) }
   }, [config.aiAutoGenEnabled, config.aiAutoGenInterval, config.aiAutoGenCategories, config.openrouterApiKey, config.openrouterModel, hasKey])
 
   const toggleCategory = (cat: string) => {
@@ -117,6 +123,7 @@ export default function AIMarketGenerator({ onUseMarket, onPublishAll }: AIMarke
         count,
         categories: selectedCategories.length > 0 ? selectedCategories : undefined,
         marketTypes: selectedTypes,
+        avoid: [...onchainRef.current, ...draftsRef.current.map(d => d.question)],
         apiKey: config.openrouterApiKey,
         model: config.openrouterModel || 'openai/gpt-4o-mini',
       })

@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom'
 import { Clock, TrendingUp, ArrowUpRight, CheckCircle2, XCircle, Minus } from 'lucide-react'
-import { Market, MarketStatus, MarketType, timeUntil, formatUsdc } from '../lib/contract'
+import { Market, MarketStatus, MarketType, timeUntil, formatUsdc, getMarketPrice } from '../lib/contract'
 
 interface MarketCardProps {
   market: Market
@@ -139,13 +139,11 @@ function StatusBadge({ status }: { status: MarketStatus }) {
 function OutcomesPreview({ market }: { market: Market }) {
   const showMax = market.marketType === MarketType.Binary ? 2 : 3
   const show = market.outcomes.slice(0, showMax)
-  const total = market.outcomePools.reduce((a, b) => a + b, 0n)
 
   return (
     <div className="space-y-2">
       {show.map((outcome, i) => {
-        const pool = market.outcomePools[i] ?? 0n
-        const pct = total > 0n ? (Number(pool) / Number(total)) * 100 : 0
+        const pct = getMarketPrice(market, i) * 100
         const isWinner = market.status === MarketStatus.Resolved && market.resolvedOutcome === BigInt(i)
         const barColor = isWinner ? 'var(--success)' : i === 0 ? 'var(--accent)' : 'var(--muted)'
         return (

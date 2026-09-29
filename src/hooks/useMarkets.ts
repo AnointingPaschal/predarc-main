@@ -15,14 +15,14 @@ export function useAllMarkets() {
   })
 }
 
-export function useMarket(marketId: bigint | undefined) {
+export function useMarket(marketId: bigint | undefined, refetchMs?: number) {
   return useReadContract({
     address: activeAddress(),
     abi: PREDARC_ABI,
     functionName: 'getMarket',
     args: marketId !== undefined ? [marketId] : undefined,
     chainId: activeChain(),
-    query: { enabled: marketId !== undefined },
+    query: { enabled: marketId !== undefined, refetchInterval: refetchMs },
   })
 }
 

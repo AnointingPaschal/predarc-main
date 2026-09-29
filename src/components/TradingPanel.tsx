@@ -3,19 +3,22 @@ import { useAccount, useSwitchChain } from 'wagmi'
 import { activeChainId } from '../lib/adminConfig'
 import { toast } from 'sonner'
 
-import { Market, MarketStatus, formatUsdc, parseUsdc } from '../lib/contract'
+import { parseUnits } from 'viem'
+import { Market, MarketStatus, formatUsdc, parseUsdc, getMarketPrice } from '../lib/contract'
 import { parseOnchainError } from '../lib/errors'
-import { useUsdcBalance, useUsdcAllowance, useSharesOut, useUserShares } from '../hooks/useMarkets'
+import { useUsdcBalance, useUsdcAllowance, useSharesOut, useUsdcOut, useUserShares, usePlatformFee } from '../hooks/useMarkets'
 import { useApproveUsdc, useBuyShares, useSellShares } from '../hooks/useEscrow'
 
 interface Props {
   market: Market
   onSuccess?: () => void
+  outcome?: number
+  onOutcomeChange?: (i: number) => void
 }
 
 type Tab = 'buy' | 'sell'
 
-export default function TradingPanel({ market, onSuccess }: Props) {
+export default function TradingPanel({ market, onSuccess, outcome, onOutcomeChange }: Props) {
   const { address, chainId } = useAccount()
   const { switchChain } = useSwitchChain()
   const targetChainId = activeChainId()
@@ -23,15 +26,22 @@ export default function TradingPanel({ market, onSuccess }: Props) {
   const targetName = targetChainId === 5042002 ? 'Arc Testnet' : 'Arc Mainnet'
 
   const [tab, setTab] = useState<Tab>('buy')
-  const [selectedOutcome, setSelectedOutcome] = useState(0)
+  const [localOutcome, setLocalOutcome] = useState(0)
+  const selectedOutcome = outcome ?? localOutcome
+  const setSelectedOutcome = (i: number) => { setLocalOutcome(i); onOutcomeChange?.(i) }
   const [amount, setAmount] = useState('')
 
   const parsedAmount = parseUsdc(amount)
+  // Sell amounts are shares (6-dp precision), converted to the contract's 1e18 share units
+  const sharesToSell = (() => { try { return amount ? parseUnits(amount, 6) * 10n ** 12n : 0n } catch { return 0n } })()
+  const { data: feeRaw } = usePlatformFee()
+  const feeBps = feeRaw !== undefined ? BigInt(feeRaw as bigint) : 200n
 
   const { data: balance, refetch: refetchBalance } = useUsdcBalance(address)
   const { data: allowance, refetch: refetchAllowance } = useUsdcAllowance(address)
   const { data: sharesOut } = useSharesOut(market.id, selectedOutcome, tab === 'buy' ? parsedAmount : 0n)
   const { data: userShares, refetch: refetchShares } = useUserShares(market.id, address, selectedOutcome)
+  const { data: usdcOut } = useUsdcOut(market.id, selectedOutcome, tab === 'sell' ? sharesToSell : 0n)
 
   const approve = useApproveUsdc()
   const buy = useBuyShares()
@@ -77,6 +87,7 @@ export default function TradingPanel({ market, onSuccess }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [approve.error, buy.error, sell.error])
 
+  const userSharesFormatted = userShares ? (Number(userShares) / 1e18).toFixed(2) : '0.00'
   const tradingClosed = market.status !== MarketStatus.Open || Date.now() / 1000 > Number(market.endTime)
   const isLoading = approve.isPending || approve.isConfirming || buy.isPending || buy.isConfirming || sell.isPending || sell.isConfirming
 
@@ -84,7 +95,8 @@ export default function TradingPanel({ market, onSuccess }: Props) {
     if (!address) return toast.error('Connect your wallet first.')
     if (isWrongChain) { switchChain({ chainId: targetChainId }); return }
     if (tradingClosed) return toast.error('Market is closed for trading.')
-    if (parsedAmount === 0n) return toast.error('Enter an amount.')
+    if ((tab === 'buy' ? parsedAmount : sharesToSell) === 0n) return toast.error('Enter an amount.')
+    if (tab === 'sell' && sharesToSell > ((userShares as bigint | undefined) ?? 0n)) return toast.error('You do not own that many shares.')
 
     if (tab === 'buy') {
       if (needsApproval) {
@@ -95,8 +107,8 @@ export default function TradingPanel({ market, onSuccess }: Props) {
       const minShares = rawSharesOut * 95n / 100n // 5% slippage
       buy.buy(market.id, BigInt(selectedOutcome), parsedAmount, minShares)
     } else {
-      const sharesToSell = parseUsdc(amount) * BigInt(1e12) // convert to 1e18 share units
-      sell.sell(market.id, BigInt(selectedOutcome), sharesToSell, 0n)
+      const minOut = ((usdcOut as bigint | undefined) ?? 0n) * 95n / 100n // 5% slippage
+      sell.sell(market.id, BigInt(selectedOutcome), sharesToSell, minOut)
     }
   }
 
@@ -108,7 +120,6 @@ export default function TradingPanel({ market, onSuccess }: Props) {
     )
   }
 
-  const userSharesFormatted = userShares ? (Number(userShares) / 1e18).toFixed(2) : '0.00'
   const estimatedOut = sharesOut ? (Number(sharesOut) / 1e18).toFixed(2) : '—'
 
   return (
@@ -137,9 +148,7 @@ export default function TradingPanel({ market, onSuccess }: Props) {
           <label className="text-xs mb-1.5 block" style={{ color: 'var(--subtle)' }}>Outcome</label>
           <div className="flex flex-wrap gap-1.5">
             {market.outcomes.map((outcome, i) => {
-              const total = market.outcomePools.reduce((a, b) => a + b, 0n)
-              const pool = market.outcomePools[i] ?? 0n
-              const pct = total > 0n ? ((Number(pool) / Number(total)) * 100).toFixed(0) : '0'
+              const pct = (getMarketPrice(market, i) * 100).toFixed(0)
               return (
                 <button
                   key={i}
@@ -161,19 +170,22 @@ export default function TradingPanel({ market, onSuccess }: Props) {
         {/* Amount input */}
         <div>
           <div className="flex justify-between items-center mb-1.5">
-            <label className="text-xs" style={{ color: 'var(--subtle)' }}>Amount (USDC)</label>
+            <label className="text-xs" style={{ color: 'var(--subtle)' }}>{tab === 'buy' ? 'Amount (USDC)' : 'Shares to sell'}</label>
             {address && (
               <button
                 className="text-xs tabular-nums"
                 style={{ color: 'var(--accent)' }}
-                onClick={() => balance && setAmount(formatUsdc(balance).replace(/,/g, ''))}
+                onClick={() => {
+                  if (tab === 'buy') { if (balance) setAmount((Number(balance) / 1e6).toFixed(6).replace(/\.?0+$/, '')) }
+                  else if (userShares) { const v = (userShares as bigint) / 10n ** 12n; setAmount(`${v / 1000000n}.${String(v % 1000000n).padStart(6, '0')}`) }
+                }}
               >
-                Balance: ${balance ? formatUsdc(balance) : '—'}
+                {tab === 'buy' ? `Balance: $${balance ? formatUsdc(balance) : '—'}` : `Max: ${userSharesFormatted}`}
               </button>
             )}
           </div>
           <div className="flex gap-2 rounded-lg overflow-hidden" style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)' }}>
-            <span className="pl-3 flex items-center text-sm" style={{ color: 'var(--muted)' }}>$</span>
+            <span className="pl-3 flex items-center text-sm" style={{ color: 'var(--muted)' }}>{tab === 'buy' ? '$' : '#'}</span>
             <input
               type="number"
               min="0"
@@ -186,31 +198,36 @@ export default function TradingPanel({ market, onSuccess }: Props) {
             />
           </div>
           {/* Quick amounts */}
-          <div className="flex gap-1.5 mt-2">
-            {['10', '25', '50', '100'].map(v => (
+          {tab === 'buy' && <div className="flex gap-1.5 mt-2">
+            {['1', '5', '10', '100'].map(v => (
               <button
                 key={v}
-                onClick={() => setAmount(v)}
+                onClick={() => setAmount(String((parseFloat(amount) || 0) + Number(v)))}
                 className="flex-1 py-1 rounded text-xs transition-colors"
                 style={{ background: 'var(--surface-strong)', color: 'var(--muted)' }}
               >
-                ${v}
+                +${v}
               </button>
             ))}
-          </div>
+          </div>}
         </div>
 
         {/* Preview */}
-        {parsedAmount > 0n && (
+        {(tab === 'buy' ? parsedAmount : sharesToSell) > 0n && (
           <div className="rounded-lg p-3 space-y-2" style={{ background: 'var(--surface-muted)' }}>
-            <div className="flex justify-between text-xs">
-              <span style={{ color: 'var(--subtle)' }}>Est. shares out</span>
-              <span className="tabular-nums" style={{ color: 'var(--ink-2)' }}>{estimatedOut}</span>
-            </div>
-            <div className="flex justify-between text-xs">
-              <span style={{ color: 'var(--subtle)' }}>Platform fee (2%)</span>
-              <span className="tabular-nums" style={{ color: 'var(--subtle)' }}>${formatUsdc(parsedAmount * 2n / 100n)}</span>
-            </div>
+            {tab === 'buy' ? (
+              <>
+                <Row l="Est. shares" v={estimatedOut} />
+                <Row l="Avg price" v={sharesOut && (sharesOut as bigint) > 0n ? `$${((Number(parsedAmount) / 1e6) / (Number(sharesOut) / 1e18)).toFixed(3)} / share` : '—'} />
+                <Row l={`Fee (${(Number(feeBps) / 100).toFixed(2)}%)`} v={`$${formatUsdc(parsedAmount * feeBps / 10000n)}`} dim />
+                <Row l="Payout if it wins" v={sharesOut ? `$${(Number(sharesOut) / 1e18).toFixed(2)}` : '—'} strong />
+              </>
+            ) : (
+              <>
+                <Row l="You receive" v={usdcOut ? `$${formatUsdc(usdcOut as bigint)}` : '—'} strong />
+                <Row l="Avg price" v={usdcOut && sharesToSell > 0n ? `$${((Number(usdcOut) / 1e6) / (Number(sharesToSell) / 1e18)).toFixed(3)} / share` : '—'} />
+              </>
+            )}
           </div>
         )}
 
@@ -236,7 +253,7 @@ export default function TradingPanel({ market, onSuccess }: Props) {
         ) : (
           <button
             onClick={handleTrade}
-            disabled={isLoading || parsedAmount === 0n}
+            disabled={isLoading || (tab === 'buy' ? parsedAmount === 0n : sharesToSell === 0n)}
             className="w-full py-3 rounded-lg text-sm font-semibold transition-all disabled:opacity-50"
             style={{ background: 'var(--accent)', color: '#0d1b2f' }}
           >
@@ -250,6 +267,15 @@ export default function TradingPanel({ market, onSuccess }: Props) {
           </button>
         )}
       </div>
+    </div>
+  )
+}
+
+function Row({ l, v, dim, strong }: { l: string; v: string; dim?: boolean; strong?: boolean }) {
+  return (
+    <div className="flex justify-between text-xs">
+      <span style={{ color: 'var(--subtle)' }}>{l}</span>
+      <span className={`tabular-nums ${strong ? 'font-semibold' : ''}`} style={{ color: strong ? 'var(--success)' : dim ? 'var(--subtle)' : 'var(--ink-2)' }}>{v}</span>
     </div>
   )
 }

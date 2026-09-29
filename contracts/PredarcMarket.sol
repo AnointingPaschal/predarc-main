@@ -123,7 +123,7 @@ contract PredarcMarket is Ownable, ReentrancyGuard {
         usdc = IERC20(_usdc);
         _feeRecipient = feeRecipient_;
         _feeBps = feeBps_;
-        _minLiquidity = 10 * 1e6;
+        _minLiquidity = 1 * 1e6; // 1 USDC (owner can change with setMinLiquidity)
     }
 
     function createMarket(

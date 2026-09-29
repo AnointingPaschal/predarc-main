@@ -6,7 +6,7 @@ import { verifyMessage, isAddress } from 'viem'
 
 export interface KVNamespaceLike {
   get(key: string): Promise<string | null>
-  put(key: string, value: string): Promise<void>
+  put(key: string, value: string, options?: { expirationTtl?: number }): Promise<void>
   delete(key: string): Promise<void>
 }
 
@@ -112,4 +112,39 @@ export async function readJson(env: Env, key: string): Promise<Record<string, un
   } catch {
     return {}
   }
+}
+
+export const NETWORKS = ['mainnet', 'testnet'] as const
+export type NetworkName = (typeof NETWORKS)[number]
+export const isNetwork = (v: unknown): v is NetworkName => v === 'mainnet' || v === 'testnet'
+export const isMarketId = (v: unknown): v is string => typeof v === 'string' && /^\d{1,9}$/.test(v)
+
+/**
+ * Verifies a normal (non-admin) wallet session: headers x-user-address,
+ * x-user-message (base64), x-user-signature. The message must start with
+ * "Predarc session" and carries Address / Host / Issued / Expires lines.
+ * Returns the lower-cased address, or an error Response.
+ */
+export async function requireUser(request: Request, env: Env): Promise<{ address: string } | Response> {
+  void env
+  const address = (request.headers.get('x-user-address') || '').toLowerCase()
+  const b64 = request.headers.get('x-user-message') || ''
+  const signature = request.headers.get('x-user-signature') || ''
+  if (!address || !b64 || !signature || !isAddress(address)) return json({ error: 'Connect your wallet and sign in to do this.' }, 401)
+  let message: string
+  try { message = new TextDecoder().decode(Uint8Array.from(atob(b64), c => c.charCodeAt(0))) } catch { return json({ error: 'Bad message encoding.' }, 400) }
+  const field = (name: string) => new RegExp(`^${name}: (.+)$`, 'm').exec(message)?.[1]?.trim()
+  if (!message.startsWith('Predarc session')) return json({ error: 'Bad message.' }, 400)
+  if (field('Address')?.toLowerCase() !== address) return json({ error: 'Message address mismatch.' }, 403)
+  if (field('Host') !== new URL(request.url).host) return json({ error: 'Message is for another host.' }, 403)
+  const issued = Number(field('Issued')); const expires = Number(field('Expires')); const now = Date.now()
+  if (!Number.isFinite(issued) || !Number.isFinite(expires)) return json({ error: 'Bad timestamps.' }, 400)
+  if (issued > now + CLOCK_TOLERANCE_MS) return json({ error: 'Your device clock is ahead of the server. Fix your date/time and sign in again.', serverTime: now }, 401)
+  if (expires - issued > 24 * 3600_000 + CLOCK_TOLERANCE_MS) return json({ error: 'Session lifetime too long.', serverTime: now }, 401)
+  if (expires < now) return json({ error: 'Session expired. Sign in again.', serverTime: now }, 401)
+  try {
+    const ok = await verifyMessage({ address: address as `0x${string}`, message, signature: signature as `0x${string}` })
+    if (!ok) return json({ error: 'Invalid signature.' }, 403)
+  } catch { return json({ error: 'Invalid signature.' }, 403) }
+  return { address }
 }

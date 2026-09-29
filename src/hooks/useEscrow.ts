@@ -1,8 +1,9 @@
 import { useState } from 'react'
 import { useConfig, useWriteContract, useWaitForTransactionReceipt } from 'wagmi'
 import { waitForTransactionReceipt } from 'wagmi/actions'
-import { erc20Abi } from 'viem'
+import { erc20Abi, keccak256, toHex } from 'viem'
 import { PREDARC_ABI } from '../lib/contract'
+import { saveMarketMeta, type MarketMeta } from '../lib/api'
 import { activeContract, activeChainId, activeUsdc } from '../lib/adminConfig'
 
 function activeAddress() { return activeContract() }
@@ -170,12 +171,14 @@ export interface CreateMarketParams {
  * Approve USDC, wait for the approval to be mined, then create the market and
  * wait for that too. Throws on failure so callers can show a real error.
  */
+const MARKET_CREATED_TOPIC = keccak256(toHex('MarketCreated(uint256,uint8,string,uint256)'))
+
 export function useCreateMarketFlow() {
   const wagmiConfig = useConfig()
   const { writeContractAsync } = useWriteContract()
   const [step, setStep] = useState<'idle' | 'approving' | 'creating'>('idle')
 
-  const run = async (p: CreateMarketParams): Promise<`0x${string}`> => {
+  const run = async (p: CreateMarketParams, meta?: MarketMeta): Promise<{ hash: `0x${string}`; marketId?: bigint }> => {
     const chainId = activeChainId()
     const contract = activeContract()
     if (!contract) throw new Error('No contract address is set for this network. Add it in Admin → Config.')
@@ -194,11 +197,27 @@ export function useCreateMarketFlow() {
         address: contract, chainId, abi: PREDARC_ABI, functionName: 'createMarket',
         args: [p.marketType, p.question, p.outcomes, p.endTime, p.resolutionTime, p.scalarLow, p.scalarHigh, p.category, p.imageUrl, p.initialLiquidity],
       })
-      await wait(hash, 'Create market')
-      return hash
+      const receipt = await waitForTransactionReceipt(wagmiConfig, { hash, chainId })
+      if (receipt.status !== 'success') throw new Error('Create market transaction reverted onchain.')
+      // MarketCreated(uint256 indexed marketId, ...) — the id is topic 1
+      const created = receipt.logs.find(l => l.address.toLowerCase() === contract.toLowerCase() && l.topics[0] === MARKET_CREATED_TOPIC)
+      const marketId = created?.topics[1] ? BigInt(created.topics[1]) : undefined
+      if (marketId !== undefined && meta && (meta.resolutionCriteria || meta.sources?.length || meta.description)) {
+        try { await saveMarketMeta(marketId, meta) } catch { /* the market exists; details can be re-saved from its page */ }
+      }
+      return { hash, marketId }
     } finally {
       setStep('idle')
     }
   }
   return { run, step, busy: step !== 'idle' }
+}
+
+export function useSetMinLiquidity() {
+  const { writeContract, data: hash, isPending, isError, error, reset } = useWriteContract()
+  const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({ hash })
+  const setMin = (amountUsdc6: bigint) => {
+    writeContract({ address: activeAddress(), chainId: activeChainId(), abi: PREDARC_ABI, functionName: 'setMinLiquidity', args: [amountUsdc6] })
+  }
+  return { setMin, hash, isPending, isConfirming, isSuccess, isError, error, reset }
 }

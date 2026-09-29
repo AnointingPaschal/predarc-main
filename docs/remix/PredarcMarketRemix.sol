@@ -29,8 +29,8 @@
 //    feeBps_      200                                          (2%; max 500)
 //
 // ── After deploy ─────────────────────────────────────────────────────────────
-//  • Optional, for testnet only: call setMinLiquidity(1000000) to allow 1 USDC markets
-//    (default minimum is 10 USDC = 10000000).
+//  • Minimum initial liquidity defaults to 1 USDC (1000000). Change it any time with
+//    setMinLiquidity(amount) — amounts use 6 decimals.
 //  • Copy the deployed address into Admin → Config → Testnet settings, then press
 //    "Check testnet contract" to confirm you are the owner.
 //
@@ -928,7 +928,7 @@ contract PredarcMarket is Ownable, ReentrancyGuard {
         usdc = IERC20(_usdc);
         _feeRecipient = feeRecipient_;
         _feeBps = feeBps_;
-        _minLiquidity = 10 * 1e6;
+        _minLiquidity = 1 * 1e6; // 1 USDC (owner can change with setMinLiquidity)
     }
 
     function createMarket(

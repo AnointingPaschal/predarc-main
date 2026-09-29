@@ -5,7 +5,7 @@ import { toast } from 'sonner'
 import { Shield, Plus, Settings, DollarSign, BarChart2, Palette, Save, Upload, RefreshCw, Sparkles } from 'lucide-react'
 import { useAllMarkets, usePlatformFee, useFeeRecipient, useAccruedFees, useContractGuard } from '../hooks/useMarkets'
 import {
-  useCreateMarketFlow, useResolveMarket, useResolveScalarMarket,
+  useCreateMarketFlow, useSetMinLiquidity, useResolveMarket, useResolveScalarMarket,
   useCancelMarket, useCloseMarket, useFeatureMarket, useSetFee, useWithdrawFees
 } from '../hooks/useEscrow'
 import { Market, MarketStatus, MarketType, formatUsdc, parseUsdc, CATEGORIES } from '../lib/contract'
@@ -271,6 +271,10 @@ function AITab() {
           category: draft.category,
           imageUrl: draft.imageUrl.startsWith('data:') ? '' : draft.imageUrl,
           initialLiquidity: parseUsdc(String(Math.max(draft.suggestedLiquidity, minLiq))),
+        }, {
+          description: draft.rationale,
+          resolutionCriteria: draft.resolutionCriteria,
+          sources: draft.sources,
         })
         published++
         toast.success(`Published ${published}/${drafts.length} on ${network}`)
@@ -299,9 +303,15 @@ function AITab() {
 function CreateTab() {
   const flow = useCreateMarketFlow()
   const guard = useContractGuard()
+  const setMinLiq = useSetMinLiquidity()
   const imageFileRef = useRef<HTMLInputElement>(null)
   const [imageMode, setImageMode] = useState<'url' | 'upload'>('url')
   const minLiq = Math.max(guard.minLiquidityUsdc ?? 0, activeSettings().minLiquidityUsdc)
+  useEffect(() => {
+    if (setMinLiq.isSuccess) toast.success('Contract minimum liquidity is now 1 USDC. Refresh to see it.')
+    if (setMinLiq.error) toast.error(parseOnchainError(setMinLiq.error))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [setMinLiq.isSuccess, setMinLiq.error])
   const [form, setForm] = useState({
     marketType: '0',
     question: '',
@@ -405,7 +415,20 @@ function CreateTab() {
         </p>
       )}
       {guard.minLiquidityUsdc !== undefined && (
-        <p className="text-[11px]" style={{ color: 'var(--subtle)' }}>Minimum initial liquidity on this contract: {guard.minLiquidityUsdc} USDC. Trading must end at least 1 hour from now.</p>
+        <div className="text-[11px] flex flex-wrap items-center gap-2" style={{ color: 'var(--subtle)' }}>
+          <span>Minimum initial liquidity on this contract: {guard.minLiquidityUsdc} USDC. Trading must end at least 1 hour from now.</span>
+          {guard.isOwner && guard.minLiquidityUsdc > 1 && (
+            <button
+              type="button"
+              disabled={setMinLiq.isPending || setMinLiq.isConfirming}
+              onClick={() => setMinLiq.setMin(1_000_000n)}
+              className="px-2 py-1 rounded-md font-semibold disabled:opacity-50"
+              style={{ background: 'var(--accent)', color: 'var(--accent-text)' }}
+            >
+              {setMinLiq.isPending || setMinLiq.isConfirming ? 'Updating…' : 'Lower contract minimum to 1 USDC'}
+            </button>
+          )}
+        </div>
       )}
 
       <Field label="Market Type">

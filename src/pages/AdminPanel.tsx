@@ -731,11 +731,45 @@ function BrandingTab() {
   )
 }
 
+// Which fields are currently sourced from a Cloudflare env var
+const ENV_SOURCED: Record<string, string> = {
+  contractAddress:        import.meta.env.VITE_CONTRACT_ADDRESS        ? 'VITE_CONTRACT_ADDRESS' : '',
+  testnetContractAddress: import.meta.env.VITE_TESTNET_CONTRACT_ADDRESS ? 'VITE_TESTNET_CONTRACT_ADDRESS' : '',
+  adminWallet:            import.meta.env.VITE_ADMIN_WALLET            ? 'VITE_ADMIN_WALLET' : '',
+  feeRecipient:           import.meta.env.VITE_FEE_RECIPIENT           ? 'VITE_FEE_RECIPIENT' : '',
+  rpcUrl:                 import.meta.env.VITE_RPC_URL                 ? 'VITE_RPC_URL' : '',
+  usdcAddress:            import.meta.env.VITE_USDC_ADDRESS            ? 'VITE_USDC_ADDRESS' : '',
+  chainlinkBtcFeed:       import.meta.env.VITE_CHAINLINK_BTC_FEED      ? 'VITE_CHAINLINK_BTC_FEED' : '',
+  chainlinkEthFeed:       import.meta.env.VITE_CHAINLINK_ETH_FEED      ? 'VITE_CHAINLINK_ETH_FEED' : '',
+}
+
+function EnvBadge({ field }: { field: string }) {
+  const varName = ENV_SOURCED[field]
+  if (!varName) return null
+  return (
+    <span
+      className="ml-2 px-1.5 py-0.5 rounded text-[9px] font-mono font-semibold"
+      style={{ background: 'rgba(99,102,241,0.15)', color: '#818cf8', border: '1px solid rgba(99,102,241,0.3)' }}
+      title={`Value set from Cloudflare env var ${varName}. Edit in Cloudflare Pages → Settings → Environment variables, then redeploy.`}
+    >
+      ENV: {varName}
+    </span>
+  )
+}
+
 function ConfigTab() {
   const [config, setConfig] = useState<SiteConfig>(loadConfig)
 
+  // Re-read on mount so env vars are always reflected
+  useEffect(() => {
+    setConfig(loadConfig())
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   const handleSave = () => {
     saveConfig(config)
+    // Re-read so env overrides are visible immediately after save
+    setConfig(loadConfig())
     toast.success('Config saved!')
   }
 
@@ -782,34 +816,34 @@ function ConfigTab() {
         </div>
       </div>
 
-      <Field label="Mainnet Contract Address">
+      <Field label={<span className="flex items-center">Mainnet Contract Address<EnvBadge field="contractAddress" /></span>}>
         <input value={config.contractAddress} onChange={e => setConfig(c => ({ ...c, contractAddress: e.target.value }))} placeholder="0x... (deployed on Arc Mainnet)" className={inputCls + ' mono'} />
       </Field>
-      <Field label="Testnet Contract Address">
+      <Field label={<span className="flex items-center">Testnet Contract Address<EnvBadge field="testnetContractAddress" /></span>}>
         <input value={config.testnetContractAddress} onChange={e => setConfig(c => ({ ...c, testnetContractAddress: e.target.value }))} placeholder="0x... (deployed on Arc Testnet)" className={inputCls + ' mono'} />
       </Field>
       <div className="grid grid-cols-2 gap-3">
-        <Field label="Mainnet RPC URL">
+        <Field label={<span className="flex items-center">Mainnet RPC URL<EnvBadge field="rpcUrl" /></span>}>
           <input value={config.rpcUrl} onChange={e => setConfig(c => ({ ...c, rpcUrl: e.target.value }))} className={inputCls} />
         </Field>
         <Field label="Min Liquidity (USDC)">
           <input type="number" min={1} step={1} value={config.minLiquidityUsdc} onChange={e => setConfig(c => ({ ...c, minLiquidityUsdc: Math.max(1, parseInt(e.target.value) || 1) }))} className={inputCls + ' tabular-nums'} />
         </Field>
       </div>
-      <Field label="USDC Address">
+      <Field label={<span className="flex items-center">USDC Address<EnvBadge field="usdcAddress" /></span>}>
         <input value={config.usdcAddress} onChange={e => setConfig(c => ({ ...c, usdcAddress: e.target.value }))} className={inputCls + ' mono'} />
       </Field>
-      <Field label="Admin Wallet">
+      <Field label={<span className="flex items-center">Admin Wallet<EnvBadge field="adminWallet" /></span>}>
         <input value={config.adminWallet} onChange={e => setConfig(c => ({ ...c, adminWallet: e.target.value }))} placeholder="0x..." className={inputCls + ' mono'} />
       </Field>
-      <Field label="Fee Recipient">
+      <Field label={<span className="flex items-center">Fee Recipient<EnvBadge field="feeRecipient" /></span>}>
         <input value={config.feeRecipient} onChange={e => setConfig(c => ({ ...c, feeRecipient: e.target.value }))} placeholder="0x..." className={inputCls + ' mono'} />
       </Field>
       <div className="grid grid-cols-2 gap-3">
-        <Field label="Chainlink BTC/USD Feed">
+        <Field label={<span className="flex items-center">Chainlink BTC/USD Feed<EnvBadge field="chainlinkBtcFeed" /></span>}>
           <input value={config.chainlinkBtcFeed} onChange={e => setConfig(c => ({ ...c, chainlinkBtcFeed: e.target.value }))} placeholder="0x..." className={inputCls + ' mono'} />
         </Field>
-        <Field label="Chainlink ETH/USD Feed">
+        <Field label={<span className="flex items-center">Chainlink ETH/USD Feed<EnvBadge field="chainlinkEthFeed" /></span>}>
           <input value={config.chainlinkEthFeed} onChange={e => setConfig(c => ({ ...c, chainlinkEthFeed: e.target.value }))} placeholder="0x..." className={inputCls + ' mono'} />
         </Field>
       </div>
@@ -910,7 +944,7 @@ function ConfigTab() {
 }
 
 // Shared components
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({ label, children }: { label: React.ReactNode; children: React.ReactNode }) {
   return (
     <div>
       <label className="text-xs mb-1 block" style={{ color: 'var(--subtle)' }}>{label}</label>

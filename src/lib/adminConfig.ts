@@ -147,11 +147,26 @@ export function getActiveRpcUrl(config: SiteConfig): string {
   return config.network === 'testnet' ? 'https://rpc.testnet.arc.network' : config.rpcUrl
 }
 
+function applyEnvOverrides(c: SiteConfig): SiteConfig {
+  // Env vars set in Cloudflare always win — they are the cross-device source
+  // of truth. A value is only overridden when the env var is non-empty so that
+  // admins can still clear a field locally via the Config tab if no env var is set.
+  if (ENV.contractAddress)        c.contractAddress        = ENV.contractAddress
+  if (ENV.testnetContractAddress) c.testnetContractAddress = ENV.testnetContractAddress
+  if (ENV.adminWallet)            c.adminWallet            = ENV.adminWallet
+  if (ENV.feeRecipient)           c.feeRecipient           = ENV.feeRecipient
+  if (ENV.rpcUrl)                 c.rpcUrl                 = ENV.rpcUrl
+  if (ENV.usdcAddress)            c.usdcAddress            = ENV.usdcAddress
+  if (ENV.chainlinkBtcFeed)       c.chainlinkBtcFeed       = ENV.chainlinkBtcFeed
+  if (ENV.chainlinkEthFeed)       c.chainlinkEthFeed       = ENV.chainlinkEthFeed
+  if (ENV.network === 'testnet' || ENV.network === 'mainnet') c.network = ENV.network
+  return c
+}
+
 export function loadConfig(): SiteConfig {
   try {
     const raw = localStorage.getItem(ADMIN_CONFIG_KEY)
-    if (!raw) return DEFAULT_CONFIG
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+    if (!raw) return applyEnvOverrides({ ...DEFAULT_CONFIG })
     const parsed = JSON.parse(raw) as Partial<SiteConfig>
     const merged: SiteConfig = {
       ...DEFAULT_CONFIG,
@@ -159,17 +174,9 @@ export function loadConfig(): SiteConfig {
       darkTheme:  { ...DEFAULT_DARK,  ...(parsed.darkTheme  ?? {}) },
       lightTheme: { ...DEFAULT_LIGHT, ...(parsed.lightTheme ?? {}) },
     }
-    // Env vars always win for contract addresses and wallet addresses —
-    // so the correct address is available on every device without manual config.
-    if (ENV.contractAddress)        merged.contractAddress        = ENV.contractAddress
-    if (ENV.testnetContractAddress) merged.testnetContractAddress = ENV.testnetContractAddress
-    if (ENV.adminWallet)            merged.adminWallet            = ENV.adminWallet
-    if (ENV.feeRecipient)           merged.feeRecipient           = ENV.feeRecipient
-    if (ENV.chainlinkBtcFeed)       merged.chainlinkBtcFeed       = ENV.chainlinkBtcFeed
-    if (ENV.chainlinkEthFeed)       merged.chainlinkEthFeed       = ENV.chainlinkEthFeed
-    return merged
+    return applyEnvOverrides(merged)
   } catch {
-    return DEFAULT_CONFIG
+    return applyEnvOverrides({ ...DEFAULT_CONFIG })
   }
 }
 

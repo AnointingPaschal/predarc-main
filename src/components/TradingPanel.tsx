@@ -112,6 +112,15 @@ export default function TradingPanel({ market, onSuccess, outcome, onOutcomeChan
     }
   }
 
+  if (!tradingClosed && market.totalLiquidity === 0n) {
+    return (
+      <div className="rounded-xl p-4 text-center space-y-1" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+        <p className="text-sm font-medium" style={{ color: 'var(--ink)' }}>No liquidity yet</p>
+        <p className="text-xs" style={{ color: 'var(--muted)' }}>This market was created for free. Trading opens as soon as the admin funds it.</p>
+      </div>
+    )
+  }
+
   if (tradingClosed) {
     return (
       <div className="rounded-xl p-4 text-center" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>

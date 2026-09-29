@@ -144,6 +144,5 @@ async function deriveInitialLiquidity(client: PublicClient, contract: `0x${strin
   const pad = (a: string) => '0x' + a.toLowerCase().replace('0x', '').padStart(64, '0')
   const to = pad(contract)
   const t = receipt.logs.find(l => l.topics[0] === TRANSFER && l.topics[2]?.toLowerCase() === to)
-  if (!t) throw new Error('Could not read initial liquidity.')
-  return BigInt(t.data)
+  return t ? BigInt(t.data) : 0n // free markets are created with 0 liquidity (no transfer)
 }

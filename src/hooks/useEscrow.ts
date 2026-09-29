@@ -187,10 +187,12 @@ export function useCreateMarketFlow() {
       if (r.status !== 'success') throw new Error(`${what} transaction reverted onchain.`)
     }
     try {
-      setStep('approving')
-      await wait(await writeContractAsync({
-        address: activeUsdc(), chainId, abi: erc20Abi, functionName: 'approve', args: [contract, p.initialLiquidity],
-      }), 'USDC approval')
+      if (p.initialLiquidity > 0n) {
+        setStep('approving')
+        await wait(await writeContractAsync({
+          address: activeUsdc(), chainId, abi: erc20Abi, functionName: 'approve', args: [contract, p.initialLiquidity],
+        }), 'USDC approval')
+      }
 
       setStep('creating')
       const hash = await writeContractAsync({
@@ -209,6 +211,26 @@ export function useCreateMarketFlow() {
     } finally {
       setStep('idle')
     }
+  }
+  return { run, step, busy: step !== 'idle' }
+}
+
+/** Owner-only: fund a market (approve USDC, then addLiquidity). Also how a free, 0-liquidity market becomes tradable. */
+export function useAddLiquidity() {
+  const wagmiConfig = useConfig()
+  const { writeContractAsync } = useWriteContract()
+  const [step, setStep] = useState<'idle' | 'approving' | 'adding'>('idle')
+  const run = async (marketId: bigint, amount: bigint) => {
+    const chainId = activeChainId(), contract = activeContract()
+    if (!contract) throw new Error('No contract address is set for this network.')
+    try {
+      setStep('approving')
+      const a = await waitForTransactionReceipt(wagmiConfig, { chainId, hash: await writeContractAsync({ address: activeUsdc(), chainId, abi: erc20Abi, functionName: 'approve', args: [contract, amount] }) })
+      if (a.status !== 'success') throw new Error('USDC approval reverted onchain.')
+      setStep('adding')
+      const r = await waitForTransactionReceipt(wagmiConfig, { chainId, hash: await writeContractAsync({ address: contract, chainId, abi: PREDARC_ABI, functionName: 'addLiquidity', args: [marketId, amount] }) })
+      if (r.status !== 'success') throw new Error('Add liquidity reverted onchain.')
+    } finally { setStep('idle') }
   }
   return { run, step, busy: step !== 'idle' }
 }

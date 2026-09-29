@@ -123,7 +123,7 @@ contract PredarcMarket is Ownable, ReentrancyGuard {
         usdc = IERC20(_usdc);
         _feeRecipient = feeRecipient_;
         _feeBps = feeBps_;
-        _minLiquidity = 1 * 1e6; // 1 USDC (owner can change with setMinLiquidity)
+        _minLiquidity = 0; // free market creation by default (owner can change with setMinLiquidity)
     }
 
     function createMarket(
@@ -154,7 +154,9 @@ contract PredarcMarket is Ownable, ReentrancyGuard {
             if (outcomeCount != 2 || scalarHigh <= scalarLow) revert InvalidOutcome();
         }
 
-        usdc.safeTransferFrom(msg.sender, address(this), initialLiquidity);
+        if (initialLiquidity > 0) {
+            usdc.safeTransferFrom(msg.sender, address(this), initialLiquidity);
+        }
 
         marketId = ++_marketCount;
         _marketIds.push(marketId);
@@ -307,8 +309,7 @@ contract PredarcMarket is Ownable, ReentrancyGuard {
     }
 
     function setMinLiquidity(uint256 amount) external onlyOwner {
-        if (amount == 0) revert InvalidLiquidity();
-        _minLiquidity = amount;
+        _minLiquidity = amount; // 0 = free market creation
         emit MinLiquiditySet(amount);
     }
 

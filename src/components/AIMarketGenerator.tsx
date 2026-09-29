@@ -66,6 +66,7 @@ export default function AIMarketGenerator({ onUseMarket, onPublishAll }: AIMarke
           categories: cats.length ? cats : undefined,
           avoid: [...onchainRef.current, ...draftsRef.current.map(d => d.question)],
           apiKey: config.openrouterApiKey,
+          webSearch: config.openrouterWebSearch,
           model: config.openrouterModel || 'openai/gpt-4o-mini',
         })
         if (!cancelled && results.length) {
@@ -125,6 +126,7 @@ export default function AIMarketGenerator({ onUseMarket, onPublishAll }: AIMarke
         marketTypes: selectedTypes,
         avoid: [...onchainRef.current, ...draftsRef.current.map(d => d.question)],
         apiKey: config.openrouterApiKey,
+        webSearch: config.openrouterWebSearch,
         model: config.openrouterModel || 'openai/gpt-4o-mini',
       })
       setDrafts(results)

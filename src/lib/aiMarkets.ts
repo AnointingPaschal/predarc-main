@@ -33,6 +33,7 @@ export interface AIGenerateOptions {
   newsContext?: string     // for 'news' mode — paste headlines or context
   marketTypes?: ('binary' | 'multiple' | 'scalar')[]  // which types to include
   avoid?: string[]         // existing questions to not repeat
+  webSearch?: boolean      // let the model search the web (OpenRouter web plugin)
   apiKey: string
   model: string
 }
@@ -176,7 +177,7 @@ async function orError(res: Response): Promise<string> {
 
 /** Tolerant JSON extraction: handles ```json fences and text around the JSON. */
 function extractJson(text: string): unknown {
-  const t = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim()
+  const t = text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim().replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim()
   try { return JSON.parse(t) } catch { /* fall through */ }
   const start = t.search(/[\[{]/)
   const end = Math.max(t.lastIndexOf(']'), t.lastIndexOf('}'))
@@ -190,7 +191,7 @@ function extractJson(text: string): unknown {
 async function chat(
   apiKey: string, model: string,
   messages: { role: 'system' | 'user'; content: string }[],
-  o: { temperature?: number; maxTokens?: number; json?: boolean } = {},
+  o: { temperature?: number; maxTokens?: number; json?: boolean; web?: boolean } = {},
 ): Promise<string> {
   const send = (json: boolean) => fetch(`${OPENROUTER_URL}/chat/completions`, {
     method: 'POST',
@@ -200,6 +201,7 @@ async function chat(
       model, messages,
       temperature: o.temperature ?? 0.7,
       max_tokens: o.maxTokens ?? 1000,
+      ...(o.web ? { plugins: [{ id: 'web', max_results: 5 }] } : {}),
       ...(json ? { response_format: { type: 'json_object' } } : {}),
     }),
   })
@@ -312,7 +314,7 @@ export async function generateMarkets(opts: AIGenerateOptions): Promise<AIMarket
     const content = await chat(opts.apiKey, opts.model, [
       { role: 'system', content: SYSTEM_PROMPT },
       { role: 'user', content: buildPrompt({ ...opts, count: want - results.length }, bits, [...avoid, ...results.map(r => r.question)]) },
-    ], { temperature: 1, maxTokens: 5000, json: true })
+    ], { temperature: 1, maxTokens: 5000, json: true, web: opts.webSearch })
 
     for (const d of parseDrafts(content)) {
       if (results.length >= want) break
@@ -324,8 +326,24 @@ export async function generateMarkets(opts: AIGenerateOptions): Promise<AIMarket
   return results
 }
 
+export interface OpenRouterModel { id: string; name: string; free: boolean; context: number }
+
+/** Live model catalogue from OpenRouter (public endpoint, no key needed). */
+export async function fetchOpenRouterModels(): Promise<OpenRouterModel[]> {
+  const res = await fetch(`${OPENROUTER_URL}/models`, { signal: AbortSignal.timeout(20_000) })
+  if (!res.ok) throw new Error(`OpenRouter model list failed (${res.status})`)
+  const d = ((await res.json()) as { data?: { id: string; name?: string; context_length?: number; pricing?: { prompt?: string; completion?: string } }[] }).data ?? []
+  return d.map(m => ({
+    id: m.id, name: m.name ?? m.id, context: m.context_length ?? 0,
+    free: m.id.endsWith(':free') || (Number(m.pricing?.prompt ?? 1) === 0 && Number(m.pricing?.completion ?? 1) === 0),
+  })).sort((a, b) => Number(b.free) - Number(a.free) || a.name.localeCompare(b.name))
+}
+
 // Popular OpenRouter models to show in the dropdown
 export const OPENROUTER_MODELS = [
+  { id: 'meta-llama/llama-3.3-70b-instruct:free', label: 'Llama 3.3 70B (free)' },
+  { id: 'deepseek/deepseek-chat-v3-0324:free', label: 'DeepSeek V3 (free)' },
+  { id: 'google/gemini-2.0-flash-exp:free', label: 'Gemini 2.0 Flash (free)' },
   { id: 'openai/gpt-4o-mini',             label: 'GPT-4o Mini (fast, cheap)' },
   { id: 'openai/gpt-4o',                  label: 'GPT-4o (best quality)' },
   { id: 'anthropic/claude-3.5-haiku',     label: 'Claude 3.5 Haiku (fast)' },

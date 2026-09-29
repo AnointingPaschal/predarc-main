@@ -11,7 +11,7 @@ import {
 import { Market, MarketStatus, MarketType, formatUsdc, parseUsdc, CATEGORIES } from '../lib/contract'
 import { loadConfig, useNetwork, activeSettings, saveConfig, resetConfig, useSiteConfig, isAdminAddress, getAdminSession, signInAsAdmin, DEFAULT_DARK, DEFAULT_LIGHT, CHAIN_IDS, SiteConfig, ThemeColors, NetworkSettings, Network, getActiveContractAddress } from '../lib/adminConfig'
 import { checkContract, type CheckLine } from '../lib/contractCheck'
-import { OPENROUTER_MODELS, testOpenRouterConnection, type ConnectionStep } from '../lib/aiMarkets'
+import { OPENROUTER_MODELS, testOpenRouterConnection, fetchOpenRouterModels, type ConnectionStep, type OpenRouterModel } from '../lib/aiMarkets'
 import AIMarketGenerator from '../components/AIMarketGenerator'
 import type { AIMarketDraft } from '../lib/aiMarkets'
 import { parseOnchainError } from '../lib/errors'
@@ -260,6 +260,7 @@ function AITab() {
         const endDate = new Date(Date.now() + draft.suggestedDurationDays * 24 * 60 * 60 * 1000)
         const resDate = new Date(endDate.getTime() + 24 * 60 * 60 * 1000)
         const minLiq = Math.max(guard.minLiquidityUsdc ?? 0, activeSettings().minLiquidityUsdc)
+        const liquidity = Math.max(minLiq, loadConfig().aiInitialLiquidityUsdc || 0)
         await flow.run({
           marketType: draft.marketType,
           question: draft.question,
@@ -270,7 +271,7 @@ function AITab() {
           scalarHigh: BigInt(Math.round(draft.scalarHigh)),
           category: draft.category,
           imageUrl: draft.imageUrl.startsWith('data:') ? '' : draft.imageUrl,
-          initialLiquidity: parseUsdc(String(Math.max(draft.suggestedLiquidity, minLiq))),
+          initialLiquidity: parseUsdc(String(liquidity)),
         }, {
           description: draft.rationale,
           resolutionCriteria: draft.resolutionCriteria,
@@ -308,7 +309,7 @@ function CreateTab() {
   const [imageMode, setImageMode] = useState<'url' | 'upload'>('url')
   const minLiq = Math.max(guard.minLiquidityUsdc ?? 0, activeSettings().minLiquidityUsdc)
   useEffect(() => {
-    if (setMinLiq.isSuccess) toast.success('Contract minimum liquidity is now 1 USDC. Refresh to see it.')
+    if (setMinLiq.isSuccess) toast.success('Contract minimum liquidity is now 0 — market creation is free. Refresh to see it.')
     if (setMinLiq.error) toast.error(parseOnchainError(setMinLiq.error))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [setMinLiq.isSuccess, setMinLiq.error])
@@ -393,7 +394,7 @@ function CreateTab() {
       scalarHigh: String(draft.scalarHigh),
       category: draft.category,
       imageUrl: draft.imageUrl,
-      initialLiquidity: String(draft.suggestedLiquidity),
+      initialLiquidity: String(Math.max(minLiq, loadConfig().aiInitialLiquidityUsdc || 0)),
     })
     toast.success('Market loaded from AI — review and deploy')
   }
@@ -417,15 +418,15 @@ function CreateTab() {
       {guard.minLiquidityUsdc !== undefined && (
         <div className="text-[11px] flex flex-wrap items-center gap-2" style={{ color: 'var(--subtle)' }}>
           <span>Minimum initial liquidity on this contract: {guard.minLiquidityUsdc} USDC. Trading must end at least 1 hour from now.</span>
-          {guard.isOwner && guard.minLiquidityUsdc > 1 && (
+          {guard.isOwner && guard.minLiquidityUsdc > 0 && (
             <button
               type="button"
               disabled={setMinLiq.isPending || setMinLiq.isConfirming}
-              onClick={() => setMinLiq.setMin(1_000_000n)}
+              onClick={() => setMinLiq.setMin(0n)}
               className="px-2 py-1 rounded-md font-semibold disabled:opacity-50"
               style={{ background: 'var(--accent)', color: 'var(--accent-text)' }}
             >
-              {setMinLiq.isPending || setMinLiq.isConfirming ? 'Updating…' : 'Lower contract minimum to 1 USDC'}
+              {setMinLiq.isPending || setMinLiq.isConfirming ? 'Updating…' : 'Make creation free (minimum 0)'}
             </button>
           )}
         </div>
@@ -823,6 +824,10 @@ function BrandingTab() {
 function ConfigTab() {
   const [config, setConfig] = useState<SiteConfig>(loadConfig)
   const [testing, setTesting] = useState(false)
+  const [catalog, setCatalog] = useState<OpenRouterModel[]>([])
+  const [catalogBusy, setCatalogBusy] = useState(false)
+  const [freeOnly, setFreeOnly] = useState(true)
+  const [modelQuery, setModelQuery] = useState('')
   const [testSteps, setTestSteps] = useState<ConnectionStep[] | null>(null)
   // Which network's settings are being edited (independent of the site's active network)
   const [editNet, setEditNet] = useState<Network>(loadConfig().network)
@@ -933,7 +938,7 @@ function ConfigTab() {
             <input value={ns.rpcUrl} onChange={e => setNs({ rpcUrl: e.target.value })} className={inputCls} />
           </Field>
           <Field label="Min Liquidity (USDC)">
-            <input type="number" min={1} step={1} value={ns.minLiquidityUsdc} onChange={e => setNs({ minLiquidityUsdc: Math.max(1, parseInt(e.target.value) || 1) })} className={inputCls + ' tabular-nums'} />
+            <input type="number" min={0} step={1} value={ns.minLiquidityUsdc} onChange={e => setNs({ minLiquidityUsdc: Math.max(0, parseFloat(e.target.value) || 0) })} className={inputCls + ' tabular-nums'} />
           </Field>
         </div>
         <Field label="USDC Address">
@@ -996,28 +1001,54 @@ function ConfigTab() {
               autoComplete="off"
             />
           </Field>
-          <Field label="AI Model">
-            <select
-              value={OPENROUTER_MODELS.some(m => m.id === config.openrouterModel) ? config.openrouterModel : 'custom'}
-              onChange={e => setConfig(c => ({ ...c, openrouterModel: e.target.value === 'custom' ? (OPENROUTER_MODELS.some(m => m.id === c.openrouterModel) ? '' : c.openrouterModel) : e.target.value }))}
-              className={selectCls}
-            >
-              {OPENROUTER_MODELS.map(m => (
-                <option key={m.id} value={m.id}>{m.label}</option>
-              ))}
-              <option value="custom">Custom model ID</option>
-            </select>
+          <Field label="AI Model (any OpenRouter model ID — free models end in :free)">
+            <input
+              list="or-models"
+              value={config.openrouterModel}
+              onChange={e => setConfig(c => ({ ...c, openrouterModel: e.target.value.trim() }))}
+              placeholder="e.g. meta-llama/llama-3.3-70b-instruct:free"
+              className={inputCls + ' mono'}
+            />
+            <datalist id="or-models">
+              {[...OPENROUTER_MODELS, ...catalog.map(m => ({ id: m.id, label: m.name }))].map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
+            </datalist>
           </Field>
-          {!OPENROUTER_MODELS.some(m => m.id === config.openrouterModel) && (
-            <Field label="Custom Model ID">
-              <input
-                value={config.openrouterModel}
-                onChange={e => setConfig(c => ({ ...c, openrouterModel: e.target.value }))}
-                placeholder="e.g. openai/gpt-4-turbo"
-                className={inputCls + ' mono'}
-              />
-            </Field>
-          )}
+          <div className="rounded-xl p-3 space-y-2" style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)' }}>
+            <div className="flex flex-wrap items-center gap-2">
+              <button type="button" disabled={catalogBusy} onClick={async () => {
+                setCatalogBusy(true)
+                try { setCatalog(await fetchOpenRouterModels()); setFreeOnly(true) } catch (e) { toast.error(e instanceof Error ? e.message : 'Could not load models') } finally { setCatalogBusy(false) }
+              }} className="px-3 py-1.5 rounded-lg text-xs font-semibold disabled:opacity-60" style={{ background: 'var(--accent)', color: 'var(--accent-text)' }}>
+                {catalogBusy ? 'Loading…' : catalog.length ? 'Reload model list' : 'Browse OpenRouter models'}
+              </button>
+              {catalog.length > 0 && (
+                <>
+                  <label className="text-xs flex items-center gap-1.5" style={{ color: 'var(--muted)' }}><input type="checkbox" checked={freeOnly} onChange={e => setFreeOnly(e.target.checked)} />Free only</label>
+                  <input value={modelQuery} onChange={e => setModelQuery(e.target.value)} placeholder="Search…" className={inputCls + ' flex-1 min-w-[8rem]'} />
+                </>
+              )}
+            </div>
+            {catalog.length > 0 && (
+              <div className="max-h-48 overflow-y-auto space-y-1">
+                {catalog.filter(m => (!freeOnly || m.free) && (m.id + m.name).toLowerCase().includes(modelQuery.toLowerCase())).slice(0, 80).map(m => (
+                  <button key={m.id} type="button" onClick={() => setConfig(c => ({ ...c, openrouterModel: m.id }))}
+                    className="w-full text-left text-xs px-2 py-1.5 rounded-md flex items-center justify-between gap-2"
+                    style={{ background: config.openrouterModel === m.id ? 'var(--accent-bg)' : 'transparent', color: 'var(--ink-2)' }}>
+                    <span className="truncate">{m.name}<span className="mono ml-2" style={{ color: 'var(--subtle)' }}>{m.id}</span></span>
+                    {m.free && <span className="px-1.5 rounded" style={{ background: 'var(--success-bg)', color: 'var(--success)' }}>free</span>}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          <label className="flex items-start gap-2 text-xs cursor-pointer" style={{ color: 'var(--muted)' }}>
+            <input type="checkbox" className="mt-0.5" checked={config.openrouterWebSearch} onChange={e => setConfig(c => ({ ...c, openrouterWebSearch: e.target.checked }))} />
+            <span><strong style={{ color: 'var(--ink)' }}>Web search (online)</strong> — lets the model look things up live when generating markets and insights. Works with free models too, but OpenRouter bills the search itself, so the account needs a little credit.</span>
+          </label>
+          <Field label="Initial liquidity for AI-published markets (USDC, 0 = free)">
+            <input type="number" min={0} step={1} value={config.aiInitialLiquidityUsdc} onChange={e => setConfig(c => ({ ...c, aiInitialLiquidityUsdc: Math.max(0, parseFloat(e.target.value) || 0) }))} className={inputCls + ' tabular-nums'} />
+            <p className="text-[11px] mt-1" style={{ color: 'var(--subtle)' }}>A market with 0 liquidity is created for free but can't be traded until you fund it (Fund market box on its page).</p>
+          </Field>
           <div className="space-y-2">
             <button
               type="button"

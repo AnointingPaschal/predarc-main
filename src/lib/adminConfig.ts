@@ -63,6 +63,8 @@ export interface SiteConfig {
   // AI config
   openrouterApiKey: string
   openrouterModel: string
+  openrouterWebSearch: boolean   // append :online so the model can search the web
+  aiInitialLiquidityUsdc: number // initial liquidity for AI-published markets (0 = free)
   aiAutoGenEnabled: boolean
   aiAutoGenInterval: number   // minutes between auto-generated markets
   aiAutoGenCategories: string // comma-separated list of categories to auto-generate
@@ -130,7 +132,7 @@ export const DEFAULT_CONFIG: SiteConfig = {
     feeRecipient:     ENV.feeRecipient,
     chainlinkBtcFeed: ENV.chainlinkBtcFeed,
     chainlinkEthFeed: ENV.chainlinkEthFeed,
-    minLiquidityUsdc: 1,
+    minLiquidityUsdc: 0,
   },
   testnet: {
     contractAddress:  ENV.testnetContractAddress,
@@ -139,11 +141,13 @@ export const DEFAULT_CONFIG: SiteConfig = {
     feeRecipient:     ENV.feeRecipient,
     chainlinkBtcFeed: '',
     chainlinkEthFeed: '',
-    minLiquidityUsdc: 1,
+    minLiquidityUsdc: 0,
   },
   adminWallet: ENV.adminWallet,
   openrouterApiKey: '',
   openrouterModel: 'openai/gpt-4o-mini',
+  openrouterWebSearch: false,
+  aiInitialLiquidityUsdc: 0,
   aiAutoGenEnabled: false,
   aiAutoGenInterval: 60,
   aiAutoGenCategories: 'Crypto,Sports,Politics',
@@ -374,7 +378,7 @@ export async function fetchAdminConfig(): Promise<SiteConfig> {
 /** Fields compared when verifying that a save really reached Cloudflare. */
 const VERIFY_FIELDS: (keyof SiteConfig)[] = [
   'siteName', 'network', 'mainnet', 'testnet',
-  'openrouterApiKey', 'openrouterModel', 'aiAutoGenEnabled',
+  'openrouterApiKey', 'openrouterModel', 'openrouterWebSearch', 'aiInitialLiquidityUsdc', 'aiAutoGenEnabled',
 ]
 
 /** Save config to Cloudflare KV, then read it back to prove it persisted. */

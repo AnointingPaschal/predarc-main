@@ -61,7 +61,9 @@ export default function AIInsights({ marketId, outcomes, prices, meta, metaLoade
           {[90, 100, 70].map((w, i) => <div key={i} className="h-3 rounded" style={{ width: `${w}%`, background: 'var(--surface-muted)' }} />)}
         </div>
       )}
-      {!a && !busy && <p className="text-sm" style={{ color: note ? 'var(--warning)' : 'var(--subtle)' }}>{note || 'Insights will appear here shortly.'}</p>}
+      {!a && !busy && (
+        <p className="text-sm" style={{ color: note ? 'var(--warning)' : 'var(--subtle)' }}>{note || 'Insights will appear here shortly.'} {note && <button className="underline" onClick={() => { void run() }}>Try again</button>}</p>
+      )}
 
       {a && (
         <div className="space-y-4">

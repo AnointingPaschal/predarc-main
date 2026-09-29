@@ -4,26 +4,43 @@
 //   POST /api/market-analysis  { network, market, force:true } (admin session required)
 // The market is read straight from the chain using the RPC/contract saved for that network.
 import { createPublicClient, http } from 'viem'
+import { arc, arcTestnet } from 'viem/chains'
 import { json, checkStorage, isNetwork, isMarketId, readJson, requireAdmin, fetchHeadlines, PUBLIC_KEY, SECRET_KEY, type Env } from '../_lib'
 import { cleanMeta } from '../_meta'
 import { PREDARC_ABI } from '../../src/lib/contract'
 import { pricesFromPools } from '../../src/lib/marketMath'
 
 const TTL_MS = 6 * 60 * 60 * 1000
-const DEFAULT_RPC = { mainnet: 'https://rpc.mainnet.arc.io', testnet: 'https://rpc.testnet.arc.network' }
+const FALLBACK_RPCS = { mainnet: [...arc.rpcUrls.default.http], testnet: [...arcTestnet.rpcUrls.default.http] }
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
+
+/** Public RPCs rate-limit shared Cloudflare IPs, so try the configured URL, an optional private one, then the fallbacks, with retries. */
+async function readMarket(urls: string[], contract: `0x${string}`, id: bigint) {
+  let lastErr: unknown
+  for (let round = 0; round < 2; round++) {
+    for (const url of urls) {
+      try {
+        const client = createPublicClient({ transport: http(url, { timeout: 8000, retryCount: 0 }) })
+        return await client.readContract({ address: contract, abi: PREDARC_ABI, functionName: 'getMarket', args: [id] })
+      } catch (e) { lastErr = e }
+    }
+    await sleep(600)
+  }
+  throw lastErr
+}
 
 interface NetCfg { contractAddress?: string; rpcUrl?: string }
 const metaKey = (n: string, m: string) => `meta:${n}:${m}`
 
 const extract = (text: string): Record<string, unknown> | undefined => {
-  const t = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim()
+  const t = text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim().replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim()
   try { return JSON.parse(t) } catch { /* fall through */ }
   const a = t.indexOf('{'), b = t.lastIndexOf('}')
   if (a >= 0 && b > a) { try { return JSON.parse(t.slice(a, b + 1)) } catch { /* give up */ } }
   return undefined
 }
 
-export const onRequestPost = async ({ request, env }: { request: Request; env: Env & { VITE_CONTRACT_ADDRESS?: string; VITE_TESTNET_CONTRACT_ADDRESS?: string } }): Promise<Response> => {
+export const onRequestPost = async ({ request, env }: { request: Request; env: Env & { VITE_CONTRACT_ADDRESS?: string; VITE_TESTNET_CONTRACT_ADDRESS?: string; MAINNET_RPC_URL?: string; TESTNET_RPC_URL?: string } }): Promise<Response> => {
   const bad = checkStorage(env); if (bad) return bad
   let body: { network?: unknown; market?: unknown; force?: unknown }
   try { body = await request.json() } catch { return json({ error: 'Invalid JSON' }, 400) }
@@ -52,13 +69,17 @@ export const onRequestPost = async ({ request, env }: { request: Request; env: E
   const net = (pub[network] ?? {}) as NetCfg
   const envAddr = network === 'testnet' ? env.VITE_TESTNET_CONTRACT_ADDRESS : env.VITE_CONTRACT_ADDRESS
   const contract = (net.contractAddress || envAddr || '').trim()
-  const rpc = (net.rpcUrl || DEFAULT_RPC[network]).trim()
+  const privateRpc = ((network === 'testnet' ? env.TESTNET_RPC_URL : env.MAINNET_RPC_URL) || '').trim()
+  const rpcUrls = [...new Set([privateRpc, (net.rpcUrl || '').trim(), ...FALLBACK_RPCS[network]].filter(Boolean))]
   if (!/^0x[0-9a-fA-F]{40}$/.test(contract)) return json({ status: 'unavailable', reason: `No ${network} contract address is configured.`, meta: existing })
 
   await env.PREDARC_KV.put(lockKey, '1', { expirationTtl: 90 })
   try {
-    const client = createPublicClient({ transport: http(rpc) })
-    const m = await client.readContract({ address: contract as `0x${string}`, abi: PREDARC_ABI, functionName: 'getMarket', args: [BigInt(marketId)] }) as unknown as {
+    let raw: unknown
+    try { raw = await readMarket(rpcUrls, contract as `0x${string}`, BigInt(marketId)) } catch {
+      return json({ status: 'error', reason: 'Could not read this market from the chain right now (the RPC is busy). It will retry automatically.', meta: existing })
+    }
+    const m = raw as unknown as {
       question: string; outcomes: string[]; outcomePools: bigint[]; totalLiquidity: bigint; endTime: bigint; resolutionTime: bigint; status: number; category: string
     }
     if (!force && (m.status !== 0 || Number(m.endTime) * 1000 < Date.now())) return json({ status: 'closed', meta: existing })
@@ -75,6 +96,7 @@ export const onRequestPost = async ({ request, env }: { request: Request; env: E
       headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json', 'HTTP-Referer': new URL(request.url).origin, 'X-Title': 'Predarc Prediction Markets' },
       body: JSON.stringify({
         model, temperature: 0.4, max_tokens: 2800,
+        ...(pub.openrouterWebSearch === true ? { plugins: [{ id: 'web', max_results: 5 }] } : {}),
         messages: [
           { role: 'system', content: 'You are a rigorous forecasting analyst for a prediction market. Be concrete, use the evidence provided, avoid hype, never claim certainty. Respond with valid JSON only.' },
           { role: 'user', content: `Analyze this prediction market.
@@ -97,8 +119,9 @@ Probabilities must cover every outcome and sum to 1.` },
     })
     if (!res.ok) {
       const t = await res.text().catch(() => '')
-      const hint = res.status === 401 ? 'The OpenRouter key was rejected.' : res.status === 402 ? 'The OpenRouter account is out of credits.' : res.status === 429 ? 'OpenRouter rate limit reached.' : `OpenRouter error ${res.status}.`
-      return json({ status: 'error', reason: `${hint} ${t.slice(0, 120)}`.trim(), meta: existing })
+      let detail = ''; try { detail = (JSON.parse(t) as { error?: { message?: string } }).error?.message ?? '' } catch { /* not json */ }
+      const hint = res.status === 401 ? 'The OpenRouter key was rejected.' : res.status === 402 ? 'The OpenRouter account has no credits (needed for web search or paid models).' : res.status === 429 ? 'The AI model is rate-limited right now (free models often are). It will retry on a later visit.' : `OpenRouter error ${res.status}.`
+      return json({ status: 'error', reason: `${hint} ${detail.slice(0, 120)}`.trim(), meta: existing })
     }
     const data = await res.json() as { choices?: { message?: { content?: string } }[] }
     const j = extract(data.choices?.[0]?.message?.content ?? '')
@@ -114,7 +137,7 @@ Probabilities must cover every outcome and sum to 1.` },
     await env.PREDARC_KV.put(metaKey(network, marketId), JSON.stringify(merged))
     return json({ status: 'generated', meta: merged })
   } catch (e) {
-    return json({ status: 'error', reason: e instanceof Error ? e.message.slice(0, 200) : 'Analysis failed', meta: existing })
+    return json({ status: 'error', reason: 'AI insights could not be generated right now. They will retry on a later visit.', meta: existing })
   } finally {
     await env.PREDARC_KV.delete(lockKey)
   }

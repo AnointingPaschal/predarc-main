@@ -5,7 +5,9 @@ import { useAccount } from 'wagmi'
 import { toast } from 'sonner'
 import { useAllMarkets, useMarket, usePlatformFee, useUserShares } from '../hooks/useMarkets'
 import { useMarketActivity } from '../hooks/useMarketActivity'
-import { useRedeemWinnings } from '../hooks/useEscrow'
+import { useAddLiquidity, useRedeemWinnings } from '../hooks/useEscrow'
+import { parseOnchainError } from '../lib/errors'
+import { parseUnits } from 'viem'
 import { activeContract, isAdminAddress, useNetwork, useSiteConfig, getAdminSession } from '../lib/adminConfig'
 import { fetchMarketMeta, fetchNews, saveMarketMeta, type MarketMeta, type NewsItem } from '../lib/api'
 import { pricesFromPools } from '../lib/marketMath'
@@ -232,6 +234,7 @@ export default function MarketDetail() {
         {/* Sidebar */}
         <div className="space-y-4">
           <div id="trade-panel" className="lg:sticky lg:top-20 space-y-4">
+            {isAdmin && !isResolved && !isCancelled && <FundBox marketId={market.id} empty={market.totalLiquidity === 0n} onDone={() => { void refetch() }} />}
             <TradingPanel market={market} outcome={Math.min(outcome, outN - 1)} onOutcomeChange={setOutcome} onSuccess={() => { void refetch() }} />
 
             {address && hasPosition && (
@@ -393,3 +396,23 @@ function Rules({ market, meta, isAdmin, onSaved, explorer, contract, created, fe
 const Section = ({ title, children }: { title: string; children: React.ReactNode }) => (
   <div><h3 className="text-xs font-semibold uppercase tracking-wider mb-1.5" style={{ color: 'var(--subtle)' }}>{title}</h3>{children}</div>
 )
+
+function FundBox({ marketId, empty, onDone }: { marketId: bigint; empty: boolean; onDone: () => void }) {
+  const fund = useAddLiquidity()
+  const [amount, setAmount] = useState('')
+  const go = async () => {
+    let raw = 0n
+    try { raw = parseUnits(amount || '0', 6) } catch { /* invalid */ }
+    if (raw <= 0n) return toast.error('Enter an amount greater than 0.')
+    try { await fund.run(marketId, raw); toast.success('Market funded'); setAmount(''); onDone() } catch (e) { toast.error(parseOnchainError(e)) }
+  }
+  return (
+    <div className="rounded-xl p-4 space-y-2" style={{ ...card, borderColor: empty ? 'var(--warning)' : 'var(--border)' }}>
+      <h3 className="text-xs font-semibold uppercase tracking-wider" style={{ color: empty ? 'var(--warning)' : 'var(--subtle)' }}>{empty ? 'Fund this market to open trading' : 'Add liquidity (admin)'}</h3>
+      <div className="flex gap-2">
+        <input type="number" min="0" step="1" value={amount} onChange={e => setAmount(e.target.value)} placeholder="USDC amount" className="flex-1 rounded-lg px-3 py-2 text-sm outline-none tabular-nums" style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)', color: 'var(--ink)' }} />
+        <button onClick={go} disabled={fund.busy} className="px-4 rounded-lg text-sm font-semibold disabled:opacity-50" style={{ background: 'var(--accent)', color: 'var(--accent-text)' }}>{fund.step === 'approving' ? 'Approving…' : fund.step === 'adding' ? 'Adding…' : 'Fund'}</button>
+      </div>
+    </div>
+  )
+}

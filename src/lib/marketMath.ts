@@ -24,7 +24,9 @@ export const eventOrder = (a: { block: bigint; logIndex: number }, b: { block: b
 
 /** Outcome probabilities (sum ≈ 1). The contract prices outcomes by inverse pool size. */
 export function pricesFromPools(pools: bigint[]): number[] {
-  if (pools.length === 0 || pools.some(p => p === 0n)) return pools.map(() => 0)
+  if (pools.length === 0) return []
+  if (pools.every(p => p === 0n)) return pools.map(() => 1 / pools.length) // unfunded market
+  if (pools.some(p => p === 0n)) return pools.map(() => 0)
   const inv = pools.map(p => 10n ** 36n / p)
   const sum = inv.reduce((a, b) => a + b, 0n)
   if (sum === 0n) return pools.map(() => 0)

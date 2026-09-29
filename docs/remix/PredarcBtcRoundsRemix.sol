@@ -1,44 +1,10 @@
 // SPDX-License-Identifier: MIT
 //
-// PredarcMarket — single-file build for Remix (OpenZeppelin 5.1.0 inlined, no imports).
-// Same logic as contracts/PredarcMarket.sol in the repo. Use it to deploy YOUR OWN copy on
-// Arc Testnet so that your admin wallet is the contract owner (createMarket / resolve /
-// cancel / fees are onlyOwner: only the deploying wallet can call them).
-//
-// ── Remix settings ───────────────────────────────────────────────────────────
-//  1. Solidity compiler:  0.8.28
-//  2. EVM version:        paris
-//  3. Optimization:       ON, runs = 200
-//  4. viaIR:              ON   (REQUIRED — createMarket has 10 parameters and fails with
-//                              "Stack too deep" without it). In Remix: tick
-//                              "Use configuration file" and add a compiler_config.json:
-//        {
-//          "language": "Solidity",
-//          "settings": {
-//            "viaIR": true,
-//            "optimizer": { "enabled": true, "runs": 200 },
-//            "evmVersion": "paris"
-//          }
-//        }
-//
-// ── Deploy (Deploy & Run → Injected Provider → wallet on Arc Testnet, chain 5042002) ─
-//  Contract: PredarcMarket
-//  Constructor arguments:
-//    _usdc        0x3600000000000000000000000000000000000000   (USDC on Arc)
-//    feeRecipient_ your fee wallet address
-//    feeBps_      200                                          (2%; max 500)
-//
-// ── After deploy ─────────────────────────────────────────────────────────────
-//  • Minimum initial liquidity defaults to 0 (free market creation). Change it any time with
-//    setMinLiquidity(amount) — amounts use 6 decimals. A market created with 0 liquidity cannot
-//    be traded until the owner funds it with addLiquidity(marketId, amount).
-//  • Version 2 adds: market editing (updateMarketInfo / updateMarketTimes), onchain comments
-//    (postComment / deleteComment / reactToComment — stored in events), and contractVersion().
-//  • Copy the deployed address into Admin → Config → Testnet settings, then press
-//    "Check testnet contract" to confirm you are the owner.
-//
-pragma solidity ^0.8.20;
-
+// PredarcBtcRounds — single-file build for Remix (OpenZeppelin inlined, no imports).
+// Remix settings: compiler 0.8.28, EVM paris, optimization ON (200 runs). viaIR NOT required.
+// Constructor: usdc_ (0x3600000000000000000000000000000000000000), feeRecipient_ (your wallet),
+//              duration_ = 300 (5 minutes), feeBps_ = 200 (2%).
+// Afterwards: put the address in Admin → BTC Rounds, then set a feed or authorize the keeper.
 // ───── @openzeppelin/contracts/utils/Context.sol ─────
 // OpenZeppelin Contracts (last updated v5.0.1) (utils/Context.sol)
 

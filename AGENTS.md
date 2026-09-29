@@ -81,3 +81,13 @@ bun run dev
 - The site is on ONE network at a time, chosen in Admin → Config → "Site network" (there is no switch in the header). Each network has its own settings (contract, RPC URL, USDC, fee recipient, min liquidity, Chainlink feeds).
 - `createMarket`, resolve, cancel and fee withdrawal are `onlyOwner`: the wallet that deployed the contract is the only one that can call them. Use Config → "Check contract" to see the onchain owner, minimum liquidity and fee.
 - Remix build of the contract: `docs/remix/PredarcMarketRemix.sol` (needs viaIR, see `docs/remix/compiler_config.json`).
+
+
+## Contract v2 (contracts/PredarcMarket.sol)
+- Free market creation: minimum liquidity defaults to 0 (`setMinLiquidity(0)` allowed). A market with 0 liquidity
+  is untradable until the owner calls `addLiquidity` (Fund box on the market page).
+- Market editing: `updateMarketInfo` (question/category/image) and `updateMarketTimes` (open markets only).
+- Onchain comments: `postComment`, `deleteComment`, `reactToComment` (events only). `contractVersion()` returns 2;
+  the frontend uses it to switch between onchain comments/editing and the legacy Cloudflare comments.
+- Images: admin uploads go to `/api/image` (KV) and the short URL is stored onchain.
+- Regenerate `docs/remix/PredarcMarketRemix.sol` and the inlined `PREDARC_ABI` in `src/lib/contract.ts` after any contract change.

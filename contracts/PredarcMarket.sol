@@ -65,6 +65,10 @@ contract PredarcMarket is Ownable, ReentrancyGuard {
     event LiquidityRemoved(uint256 indexed marketId, uint256 amount);
     event MinLiquiditySet(uint256 amount);
     event PriceFeedSet(uint256 indexed marketId, address feed);
+    event MarketUpdated(uint256 indexed marketId);
+    event CommentPosted(uint256 indexed marketId, uint256 indexed commentId, address indexed author, uint256 parentId, string text);
+    event CommentDeleted(uint256 indexed marketId, uint256 indexed commentId, address indexed by);
+    event CommentReaction(uint256 indexed marketId, uint256 indexed commentId, address indexed user, bool liked);
 
     error InvalidAddress();
     error InvalidFee();
@@ -81,6 +85,8 @@ contract PredarcMarket is Ownable, ReentrancyGuard {
     error NotDiscreteMarket();
     error AlreadyRedeemed();
     error NothingToRedeem();
+    error InvalidComment();
+    error NotCommentAuthor();
 
     IERC20 public immutable usdc;
 
@@ -91,12 +97,19 @@ contract PredarcMarket is Ownable, ReentrancyGuard {
     uint256 private constant MIN_OUTCOMES = 2;
     uint256 private constant MAX_OUTCOMES = 10;
     uint256 private constant RESOLUTION_GRACE_PERIOD = 30 days;
+    uint256 private constant MAX_COMMENT_BYTES = 600;
+    uint256 private constant MAX_QUESTION_BYTES = 300;
 
     uint256 private _feeBps;
     address private _feeRecipient;
     uint256 private _accruedProtocolFees;
     uint256 private _marketCount;
     uint256 private _minLiquidity;
+    uint256 private _commentCount;
+
+    /// @dev Comments live in events (cheap); only authorship is kept so authors/owner can delete.
+    struct CommentRef { address author; uint96 marketId; }
+    mapping(uint256 => CommentRef) private _commentRefs;
 
     mapping(uint256 => Market) private _markets;
     uint256[] private _marketIds;
@@ -306,6 +319,76 @@ contract PredarcMarket is Ownable, ReentrancyGuard {
         if (amount == 0) revert NothingToRedeem();
         _accruedProtocolFees = 0;
         usdc.safeTransfer(_feeRecipient, amount);
+    }
+
+    /// @notice Owner: edit the public details of a market that has not been resolved or cancelled.
+    function updateMarketInfo(
+        uint256 marketId,
+        string calldata question,
+        string calldata category,
+        string calldata imageUrl
+    ) external onlyOwner {
+        Market storage m = _getMarket(marketId);
+        if (m.status == MarketStatus.Resolved || m.status == MarketStatus.Cancelled) revert InvalidStatus();
+        uint256 qLen = bytes(question).length;
+        if (qLen == 0 || qLen > MAX_QUESTION_BYTES) revert InvalidMarket();
+        m.question = question;
+        m.category = category;
+        m.imageUrl = imageUrl;
+        emit MarketUpdated(marketId);
+    }
+
+    /// @notice Owner: move the trading end / resolution time of a market that is still open.
+    function updateMarketTimes(uint256 marketId, uint256 endTime, uint256 resolutionTime) external onlyOwner {
+        Market storage m = _getMarket(marketId);
+        if (m.status != MarketStatus.Open) revert InvalidStatus();
+        if (endTime <= block.timestamp || resolutionTime < endTime) revert InvalidTimes();
+        m.endTime = endTime;
+        m.resolutionTime = resolutionTime;
+        emit MarketUpdated(marketId);
+    }
+
+    /// @notice Post a comment on a market. Anyone can comment; gas is the spam limit.
+    /// @param parentId 0 for a top-level comment, otherwise the id of a comment on the same market.
+    function postComment(uint256 marketId, string calldata text, uint256 parentId) external returns (uint256 commentId) {
+        _getMarket(marketId);
+        uint256 len = bytes(text).length;
+        if (len == 0 || len > MAX_COMMENT_BYTES) revert InvalidComment();
+        if (parentId != 0) {
+            CommentRef storage p = _commentRefs[parentId];
+            if (p.author == address(0) || p.marketId != marketId) revert InvalidComment();
+        }
+        commentId = ++_commentCount;
+        _commentRefs[commentId] = CommentRef({author: msg.sender, marketId: uint96(marketId)});
+        emit CommentPosted(marketId, commentId, msg.sender, parentId, text);
+    }
+
+    /// @notice The author or the owner (moderation) can hide a comment. Interfaces should honour the event.
+    function deleteComment(uint256 commentId) external {
+        CommentRef storage c = _commentRefs[commentId];
+        if (c.author == address(0)) revert InvalidComment();
+        if (msg.sender != c.author && msg.sender != owner()) revert NotCommentAuthor();
+        emit CommentDeleted(c.marketId, commentId, msg.sender);
+    }
+
+    /// @notice Like or unlike a comment (latest event per user wins).
+    function reactToComment(uint256 commentId, bool liked) external {
+        CommentRef storage c = _commentRefs[commentId];
+        if (c.author == address(0)) revert InvalidComment();
+        emit CommentReaction(c.marketId, commentId, msg.sender, liked);
+    }
+
+    function totalComments() external view returns (uint256) {
+        return _commentCount;
+    }
+
+    function commentAuthor(uint256 commentId) external view returns (address) {
+        return _commentRefs[commentId].author;
+    }
+
+    /// @notice Feature level of this deployment: 2 = free creation, market editing, onchain comments.
+    function contractVersion() external pure returns (uint256) {
+        return 2;
     }
 
     function setMinLiquidity(uint256 amount) external onlyOwner {

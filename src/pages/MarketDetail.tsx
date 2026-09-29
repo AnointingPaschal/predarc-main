@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useParams, Link } from 'react-router-dom'
+import { useParams, Link, useSearchParams } from 'react-router-dom'
 import { ArrowLeft, Clock, ExternalLink, CheckCircle, Share2, Newspaper, Pencil, Copy } from 'lucide-react'
 import { useAccount } from 'wagmi'
 import { toast } from 'sonner'
@@ -8,8 +8,8 @@ import { useMarketActivity } from '../hooks/useMarketActivity'
 import { useAddLiquidity, useRedeemWinnings } from '../hooks/useEscrow'
 import { parseOnchainError } from '../lib/errors'
 import { parseUnits } from 'viem'
-import { activeContract, isAdminAddress, useNetwork, useSiteConfig, getAdminSession } from '../lib/adminConfig'
-import { fetchMarketMeta, fetchNews, saveMarketMeta, type MarketMeta, type NewsItem } from '../lib/api'
+import { activeContract, isAdminAddress, useNetwork, useSiteConfig } from '../lib/adminConfig'
+import { fetchMarketMeta, fetchNews, type MarketMeta, type NewsItem } from '../lib/api'
 import { pricesFromPools } from '../lib/marketMath'
 import { Market, MarketStatus, MarketType, formatUsdc, statusColor, statusLabel, timeUntil } from '../lib/contract'
 import TradingPanel from '../components/TradingPanel'
@@ -21,6 +21,7 @@ import Comments from '../components/market/Comments'
 import AIInsights from '../components/market/AIInsights'
 import { compactUsd, explorerBase, outcomeColor, pct, shortAddr, timeAgo, usd } from '../components/market/format'
 import MarketCard from '../components/MarketCard'
+import MarketEditor from '../components/market/MarketEditor'
 
 type TabKey = 'book' | 'activity' | 'holders' | 'comments'
 const card = { background: 'var(--surface)', border: '1px solid var(--border)' } as const
@@ -41,6 +42,9 @@ export default function MarketDetail() {
   const redeem = useRedeemWinnings()
 
   const [outcome, setOutcome] = useState(0)
+  const [params, setParams] = useSearchParams()
+  const [editing, setEditing] = useState(false)
+  useEffect(() => { if (params.get('edit') === '1') setEditing(true) }, [params])
   const [tab, setTab] = useState<TabKey>('book')
   const [meta, setMeta] = useState<MarketMeta>({})
   const [metaLoaded, setMetaLoaded] = useState(false)
@@ -121,6 +125,7 @@ export default function MarketDetail() {
                   <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: 'var(--surface-strong)', color: 'var(--muted)' }}>{market.category || 'General'}</span>
                   <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: 'var(--surface-strong)', color: 'var(--muted)' }}>{market.marketType === MarketType.Binary ? 'Binary' : market.marketType === MarketType.MultipleChoice ? 'Multiple choice' : 'Scalar'}</span>
                   <span className={`text-xs font-medium ${statusColor(market.status)}`}>{statusLabel(market.status)}</span>
+                  {isAdmin && market.status !== MarketStatus.Resolved && market.status !== MarketStatus.Cancelled && <button onClick={() => setEditing(true)} className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium" style={{ background: 'var(--accent-bg)', color: 'var(--accent)' }}><Pencil size={11} />Edit</button>}
                   <button onClick={share} className="ml-auto p-1.5 rounded-lg hover:opacity-80" style={{ color: 'var(--subtle)' }} title="Share"><Share2 size={14} /></button>
                 </div>
                 <h1 className="display text-xl sm:text-2xl font-600 text-balance" style={{ color: 'var(--ink)' }}>{market.question}</h1>
@@ -193,7 +198,7 @@ export default function MarketDetail() {
           <AIInsights marketId={marketId} outcomes={market.outcomes} prices={prices} meta={meta} metaLoaded={metaLoaded} isAdmin={isAdmin} active={!isResolved && !isCancelled} onMeta={setMeta} />
           <div className="rounded-xl p-5" style={card}>
             <h2 className="text-sm font-semibold mb-3" style={{ color: 'var(--ink-2)' }}>Rules & details</h2>
-            <Rules market={market} meta={meta} isAdmin={isAdmin} onSaved={setMeta} explorer={explorer} contract={activeContract()} created={created} feeBps={feeBps} />
+            <Rules market={market} meta={meta} explorer={explorer} contract={activeContract()} created={created} feeBps={feeBps} />
           </div>
 
           {/* Tabs */}
@@ -211,7 +216,7 @@ export default function MarketDetail() {
                 trades={trades} activityLoading={activity.loading} activityError={activity.error} onRetry={activity.retry} network={network} />}
               {tab === 'activity' && (!activity.data ? <ActivityState a={activity} /> : <ActivityTable trades={trades} outcomes={market.outcomes} me={address} network={network} />)}
               {tab === 'holders' && (!activity.data ? <ActivityState a={activity} /> : <Holders holders={activity.data?.holders ?? []} outcomes={market.outcomes} prices={prices} me={address} network={network} />)}
-              {tab === 'comments' && <Comments marketId={marketId} admin={isAdmin} />}
+              {tab === 'comments' && <Comments marketId={marketId} admin={isAdmin} network={network} />}
             </div>
           </div>
 
@@ -268,6 +273,8 @@ export default function MarketDetail() {
           </div>
         </div>
       </div>
+
+      {editing && <MarketEditor market={market} meta={meta} onMeta={setMeta} onClose={() => { setEditing(false); if (params.get('edit')) { params.delete('edit'); setParams(params, { replace: true }) } }} onSaved={() => { void refetch() }} />}
 
       {others.length > 0 && (
         <div className="mt-8">
@@ -326,54 +333,21 @@ function ScalarView({ market, prices }: { market: Market; prices: number[] }) {
   )
 }
 
-function Rules({ market, meta, isAdmin, onSaved, explorer, contract, created, feeBps }: {
-  market: Market; meta: MarketMeta; isAdmin: boolean; onSaved: (m: MarketMeta) => void; explorer: string; contract: string; created?: number; feeBps: bigint
+function Rules({ market, meta, explorer, contract, created, feeBps }: {
+  market: Market; meta: MarketMeta; explorer: string; contract: string; created?: number; feeBps: bigint
 }) {
-  const [edit, setEdit] = useState(false)
-  const [rules, setRules] = useState(meta.resolutionCriteria ?? '')
-  const [desc, setDesc] = useState(meta.description ?? '')
-  const [src, setSrc] = useState((meta.sources ?? []).map(s => `${s.title} | ${s.url}`).join('\n'))
-  const [busy, setBusy] = useState(false)
-  useEffect(() => { setRules(meta.resolutionCriteria ?? ''); setDesc(meta.description ?? ''); setSrc((meta.sources ?? []).map(s => `${s.title} | ${s.url}`).join('\n')) }, [meta])
-
-  const save = async () => {
-    if (!getAdminSession()) return toast.error('Sign in on the Admin page first.')
-    setBusy(true)
-    try {
-      const sources = src.split('\n').map(l => l.trim()).filter(Boolean).map(l => { const [a, b] = l.includes('|') ? l.split('|') : [l, l]; return { title: a.trim(), url: b.trim() } })
-      onSaved(await saveMarketMeta(market.id, { description: desc, resolutionCriteria: rules, sources }))
-      setEdit(false); toast.success('Details saved')
-    } catch (e) { toast.error(e instanceof Error ? e.message : 'Save failed') } finally { setBusy(false) }
-  }
-  const field = { background: 'var(--surface-muted)', border: '1px solid var(--border)', color: 'var(--ink)' }
-
   return (
     <div className="space-y-5">
-      {isAdmin && !edit && <button onClick={() => setEdit(true)} className="flex items-center gap-1.5 text-xs font-medium" style={{ color: 'var(--accent)' }}><Pencil size={12} />Edit rules & sources</button>}
-      {edit ? (
-        <div className="space-y-3">
-          <label className="block text-xs" style={{ color: 'var(--subtle)' }}>About<textarea value={desc} onChange={e => setDesc(e.target.value)} rows={3} className="mt-1 w-full rounded-lg px-3 py-2 text-sm outline-none" style={field} /></label>
-          <label className="block text-xs" style={{ color: 'var(--subtle)' }}>Resolution criteria<textarea value={rules} onChange={e => setRules(e.target.value)} rows={4} className="mt-1 w-full rounded-lg px-3 py-2 text-sm outline-none" style={field} /></label>
-          <label className="block text-xs" style={{ color: 'var(--subtle)' }}>Sources — one per line as “Title | https://url”<textarea value={src} onChange={e => setSrc(e.target.value)} rows={3} className="mt-1 w-full rounded-lg px-3 py-2 text-sm outline-none font-mono" style={field} /></label>
-          <div className="flex gap-2">
-            <button onClick={save} disabled={busy} className="px-4 py-2 rounded-lg text-sm font-semibold disabled:opacity-50" style={{ background: 'var(--accent)', color: 'var(--accent-text)' }}>{busy ? 'Saving…' : 'Save'}</button>
-            <button onClick={() => setEdit(false)} className="px-4 py-2 rounded-lg text-sm" style={{ background: 'var(--surface-strong)', color: 'var(--muted)' }}>Cancel</button>
-          </div>
-        </div>
-      ) : (
-        <>
-          {meta.description && <Section title="About"><p className="text-sm whitespace-pre-wrap" style={{ color: 'var(--ink-2)' }}>{meta.description}</p></Section>}
-          <Section title="Resolution criteria">
-            <p className="text-sm whitespace-pre-wrap" style={{ color: meta.resolutionCriteria ? 'var(--ink-2)' : 'var(--subtle)' }}>
-              {meta.resolutionCriteria || `Resolved by the market admin after ${new Date(Number(market.resolutionTime) * 1000).toLocaleString()} using publicly verifiable information. If the outcome cannot be determined the market may be cancelled and participants refunded.`}
-            </p>
-          </Section>
-          {!!meta.sources?.length && (
-            <Section title="Sources">
-              <ul className="space-y-1">{meta.sources.map((s, i) => <li key={i}><a href={s.url} target="_blank" rel="noopener noreferrer" className="text-sm inline-flex items-center gap-1 hover:opacity-80" style={{ color: 'var(--accent)' }}>{s.title || s.url}<ExternalLink size={11} /></a></li>)}</ul>
-            </Section>
-          )}
-        </>
+      {meta.description && <Section title="About"><p className="text-sm whitespace-pre-wrap" style={{ color: 'var(--ink-2)' }}>{meta.description}</p></Section>}
+      <Section title="Resolution criteria">
+        <p className="text-sm whitespace-pre-wrap" style={{ color: meta.resolutionCriteria ? 'var(--ink-2)' : 'var(--subtle)' }}>
+          {meta.resolutionCriteria || `Resolved by the market admin after ${new Date(Number(market.resolutionTime) * 1000).toLocaleString()} using publicly verifiable information. If the outcome cannot be determined the market may be cancelled and participants refunded.`}
+        </p>
+      </Section>
+      {!!meta.sources?.length && (
+        <Section title="Sources">
+          <ul className="space-y-1">{meta.sources.map((s, i) => <li key={i}><a href={s.url} target="_blank" rel="noopener noreferrer" className="text-sm inline-flex items-center gap-1 hover:opacity-80" style={{ color: 'var(--accent)' }}>{s.title || s.url}<ExternalLink size={11} /></a></li>)}</ul>
+        </Section>
       )}
       <Section title="Timeline">
         <ul className="text-sm space-y-1" style={{ color: 'var(--ink-2)' }}>

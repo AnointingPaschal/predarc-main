@@ -3,6 +3,7 @@ import { useAccount, useSignMessage, useSwitchChain } from 'wagmi'
 import { ConnectKitButton } from 'connectkit'
 import { toast } from 'sonner'
 import { Shield, Plus, Settings, DollarSign, BarChart2, Palette, Save, Upload, RefreshCw, Sparkles } from 'lucide-react'
+import { Link } from 'react-router-dom'
 import { useAllMarkets, usePlatformFee, useFeeRecipient, useAccruedFees, useContractGuard } from '../hooks/useMarkets'
 import {
   useCreateMarketFlow, useSetMinLiquidity, useResolveMarket, useResolveScalarMarket,
@@ -11,6 +12,7 @@ import {
 import { Market, MarketStatus, MarketType, formatUsdc, parseUsdc, CATEGORIES } from '../lib/contract'
 import { loadConfig, useNetwork, activeSettings, saveConfig, resetConfig, useSiteConfig, isAdminAddress, getAdminSession, signInAsAdmin, DEFAULT_DARK, DEFAULT_LIGHT, CHAIN_IDS, SiteConfig, ThemeColors, NetworkSettings, Network, getActiveContractAddress } from '../lib/adminConfig'
 import { checkContract, type CheckLine } from '../lib/contractCheck'
+import ImagePicker from '../components/ImagePicker'
 import { OPENROUTER_MODELS, testOpenRouterConnection, fetchOpenRouterModels, type ConnectionStep, type OpenRouterModel } from '../lib/aiMarkets'
 import AIMarketGenerator from '../components/AIMarketGenerator'
 import type { AIMarketDraft } from '../lib/aiMarkets'
@@ -179,6 +181,9 @@ function MarketsTab() {
           </div>
 
           <div className="flex flex-wrap gap-2 mt-3">
+            {(m.status === MarketStatus.Open || m.status === MarketStatus.Closed) && (
+              <Link to={`/market/${m.id}?edit=1`} className="px-3 py-1.5 rounded-lg text-xs font-medium" style={{ background: 'var(--accent-bg)', color: 'var(--accent)' }}>Edit</Link>
+            )}
             {m.status === MarketStatus.Open && (
               <>
                 <AdminBtn onClick={() => closeMarket.close(m.id)} loading={closeMarket.isPending}>Close</AdminBtn>
@@ -305,8 +310,6 @@ function CreateTab() {
   const flow = useCreateMarketFlow()
   const guard = useContractGuard()
   const setMinLiq = useSetMinLiquidity()
-  const imageFileRef = useRef<HTMLInputElement>(null)
-  const [imageMode, setImageMode] = useState<'url' | 'upload'>('url')
   const minLiq = Math.max(guard.minLiquidityUsdc ?? 0, activeSettings().minLiquidityUsdc)
   useEffect(() => {
     if (setMinLiq.isSuccess) toast.success('Contract minimum liquidity is now 0 — market creation is free. Refresh to see it.')
@@ -355,7 +358,7 @@ function CreateTab() {
     if (Number(endTs) <= now + 3600) return toast.error('Trading must end at least 1 hour from now.')
     if (resTs < endTs) return toast.error('Resolution time must be at or after the trading end time.')
     if (parseFloat(form.initialLiquidity) < minLiq) return toast.error(`Initial liquidity must be at least ${minLiq} USDC.`)
-    if (form.imageUrl.length > 1500) return toast.error('That image is too large to store onchain. Use an Image URL instead of uploading a file.')
+    if (form.imageUrl.length > 500) return toast.error('Image link is too long. Use the Upload option or a shorter URL.')
     if (form.outcomes.some(o => !o.trim())) return toast.error('Every outcome needs a name.')
 
     try {
@@ -492,59 +495,7 @@ function CreateTab() {
 
       <Field label="Market Image (optional)">
         <div className="space-y-2">
-          {/* Toggle */}
-          <div className="flex rounded-lg overflow-hidden" style={{ border: '1px solid var(--border)', width: 'fit-content' }}>
-            {(['url', 'upload'] as const).map(m => (
-              <button
-                key={m}
-                onClick={() => setImageMode(m)}
-                className="px-3 py-1.5 text-xs font-medium capitalize"
-                style={{
-                  background: imageMode === m ? 'var(--accent)' : 'var(--surface-muted)',
-                  color: imageMode === m ? '#fff' : 'var(--muted)',
-                }}
-              >
-                {m === 'url' ? 'Image URL' : 'Upload File'}
-              </button>
-            ))}
-          </div>
-          {imageMode === 'url' ? (
-            <input
-              value={form.imageUrl}
-              onChange={e => setForm(f => ({ ...f, imageUrl: e.target.value }))}
-              placeholder="https://..."
-              className={inputCls}
-            />
-          ) : (
-            <div className="flex items-center gap-3">
-              {form.imageUrl && form.imageUrl.startsWith('data:') && (
-                <img src={form.imageUrl} alt="Preview" className="h-12 w-12 object-cover rounded-lg flex-shrink-0" />
-              )}
-              <button
-                onClick={() => imageFileRef.current?.click()}
-                className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs"
-                style={{ background: 'var(--surface-strong)', color: 'var(--muted)', border: '1px solid var(--border)' }}
-              >
-                <Upload size={12} /> {form.imageUrl && form.imageUrl.startsWith('data:') ? 'Change Image' : 'Choose Image'}
-              </button>
-              {form.imageUrl && form.imageUrl.startsWith('data:') && (
-                <button onClick={() => setForm(f => ({ ...f, imageUrl: '' }))} className="text-xs" style={{ color: 'var(--danger)' }}>Remove</button>
-              )}
-              <input
-                ref={imageFileRef}
-                type="file"
-                accept="image/*"
-                className="hidden"
-                onChange={e => {
-                  const file = e.target.files?.[0]
-                  if (!file) return
-                  const reader = new FileReader()
-                  reader.onload = ev => setForm(f => ({ ...f, imageUrl: ev.target?.result as string ?? '' }))
-                  reader.readAsDataURL(file)
-                }}
-              />
-            </div>
-          )}
+          <ImagePicker value={form.imageUrl} onChange={url => setForm(f => ({ ...f, imageUrl: url }))} />
         </div>
       </Field>
 

@@ -1,5 +1,5 @@
 // Rebuilds a market's full activity (trades, liquidity, price history) from onchain events.
-import { parseAbiItem, type PublicClient } from 'viem'
+import { parseAbiItem, type AbiEvent, type PublicClient } from 'viem'
 import { replayMatching, holdersFromTrades, type MarketEvent, type TradeEvent, type Replay, type Holder, type PoolState } from './marketMath'
 
 const EV = {
@@ -14,7 +14,7 @@ const EV = {
 type AnyLog = { blockNumber: bigint; logIndex: number; transactionHash: string; args: Record<string, unknown> }
 
 /** getLogs that halves the block range whenever the RPC rejects it. */
-async function getLogsAdaptive(client: PublicClient, address: `0x${string}`, event: (typeof EV)[keyof typeof EV], from: bigint, to: bigint, args?: Record<string, unknown>, depth = 0): Promise<AnyLog[]> {
+export async function getLogsAdaptive(client: PublicClient, address: `0x${string}`, event: AbiEvent, from: bigint, to: bigint, args?: Record<string, unknown>, depth = 0): Promise<AnyLog[]> {
   try {
     const logs = await client.getLogs({ address, event: event as never, args: args as never, fromBlock: from, toBlock: to })
     return logs as unknown as AnyLog[]
@@ -29,6 +29,12 @@ async function getLogsAdaptive(client: PublicClient, address: `0x${string}`, eve
   }
 }
 
+const COMMENT_EV = {
+  posted: parseAbiItem('event CommentPosted(uint256 indexed marketId, uint256 indexed commentId, address indexed author, uint256 parentId, string text)'),
+  deleted: parseAbiItem('event CommentDeleted(uint256 indexed marketId, uint256 indexed commentId, address indexed by)'),
+  reaction: parseAbiItem('event CommentReaction(uint256 indexed marketId, uint256 indexed commentId, address indexed user, bool liked)'),
+}
+
 const createdCache = new Map<string, bigint>()
 const blockTimeCache = new Map<string, number>()
 
@@ -40,7 +46,7 @@ const withTimeout = <T,>(p: Promise<T>, ms: number, what: string): Promise<T> =>
  * (monotonic) — about 25 cheap calls instead of scanning millions of blocks for logs.
  * Falls back to a log scan if the RPC has no historical state.
  */
-async function findCreationBlock(client: PublicClient, contract: `0x${string}`, marketId: bigint, latest: bigint, deployBlock: bigint): Promise<bigint> {
+export async function findCreationBlock(client: PublicClient, contract: `0x${string}`, marketId: bigint, latest: bigint, deployBlock: bigint): Promise<bigint> {
   const countAt = async (blockNumber: bigint): Promise<bigint> => {
     try { return (await client.readContract({ address: contract, abi: COUNT_ABI, functionName: 'getTotalMarkets', blockNumber })) as bigint } catch { return 0n }
   }
@@ -145,4 +151,83 @@ async function deriveInitialLiquidity(client: PublicClient, contract: `0x${strin
   const to = pad(contract)
   const t = receipt.logs.find(l => l.topics[0] === TRANSFER && l.topics[2]?.toLowerCase() === to)
   return t ? BigInt(t.data) : 0n // free markets are created with 0 liquidity (no transfer)
+}
+
+
+export interface OnchainComment { id: string; address: string; text: string; ts: number; parentId?: string; likes: string[]; txHash: string }
+
+/** Onchain comments for a market (contract v2+): posted, minus deleted, with likes from the latest reaction per user. */
+export async function loadOnchainComments(client: PublicClient, contract: `0x${string}`, marketId: bigint, deployBlock?: number): Promise<OnchainComment[]> {
+  const latest = await client.getBlockNumber()
+  const key = `${contract}:${marketId}`
+  let from = createdCache.get(key)
+  if (from === undefined) {
+    from = await withTimeout(findCreationBlock(client, contract, marketId, latest, BigInt(deployBlock ?? 0)), 40_000, 'Locating the market')
+    createdCache.set(key, from)
+  }
+  const [posted, deleted, reacted] = await Promise.all([
+    withTimeout(getLogsAdaptive(client, contract, COMMENT_EV.posted, from, latest, { marketId }), 60_000, 'Loading comments'),
+    withTimeout(getLogsAdaptive(client, contract, COMMENT_EV.deleted, from, latest, { marketId }), 60_000, 'Loading comments'),
+    withTimeout(getLogsAdaptive(client, contract, COMMENT_EV.reaction, from, latest, { marketId }), 60_000, 'Loading comments'),
+  ])
+  const gone = new Set(deleted.map(l => String(l.args.commentId)))
+  const likeState = new Map<string, Map<string, boolean>>()
+  ;[...reacted].sort((a, b) => (a.blockNumber === b.blockNumber ? a.logIndex - b.logIndex : a.blockNumber < b.blockNumber ? -1 : 1)).forEach(l => {
+    const id = String(l.args.commentId); const m = likeState.get(id) ?? new Map<string, boolean>()
+    m.set((l.args.user as string).toLowerCase(), Boolean(l.args.liked)); likeState.set(id, m)
+  })
+  const blocks = [...new Set(posted.map(l => l.blockNumber))]
+  const times = new Map<bigint, number>()
+  for (let i = 0; i < blocks.length; i += 25) {
+    await Promise.all(blocks.slice(i, i + 25).map(async b => {
+      const ck = `${contract}:${b}`; const hit = blockTimeCache.get(ck)
+      if (hit) { times.set(b, hit); return }
+      try { const t = Number((await withTimeout(client.getBlock({ blockNumber: b }), 15_000, 'Block lookup')).timestamp); blockTimeCache.set(ck, t); times.set(b, t) } catch { times.set(b, 0) }
+    }))
+  }
+  return posted.filter(l => !gone.has(String(l.args.commentId))).map(l => ({
+    id: String(l.args.commentId), address: (l.args.author as string).toLowerCase(), text: String(l.args.text),
+    ts: (times.get(l.blockNumber) ?? 0) * 1000, parentId: l.args.parentId ? String(l.args.parentId) : undefined,
+    likes: [...(likeState.get(String(l.args.commentId)) ?? new Map()).entries()].filter(([, v]) => v).map(([k]) => k),
+    txHash: l.transactionHash,
+  }))
+}
+
+
+// ── A wallet's trades across all markets (portfolio) ─────────────────────────
+const USER_EV = {
+  bought: EV.bought, sold: EV.sold,
+  redeemed: parseAbiItem('event WinningsRedeemed(uint256 indexed marketId, address indexed user, uint256 amount)'),
+}
+export interface UserTrade { kind: 'buy' | 'sell' | 'redeem'; marketId: bigint; outcome: number; usdc: bigint; shares: bigint; block: bigint; logIndex: number; txHash: string; ts: number }
+
+export async function loadUserTrades(client: PublicClient, contract: `0x${string}`, user: `0x${string}`, earliestMarketId: bigint, deployBlock?: number): Promise<UserTrade[]> {
+  const latest = await client.getBlockNumber()
+  const key = `${contract}:${earliestMarketId}`
+  let from = createdCache.get(key)
+  if (from === undefined) {
+    from = await withTimeout(findCreationBlock(client, contract, earliestMarketId, latest, BigInt(deployBlock ?? 0)), 40_000, 'Locating your first market')
+    createdCache.set(key, from)
+  }
+  const [bought, sold, redeemed] = await Promise.all([
+    withTimeout(getLogsAdaptive(client, contract, USER_EV.bought, from, latest, { user }), 60_000, 'Loading your trades'),
+    withTimeout(getLogsAdaptive(client, contract, USER_EV.sold, from, latest, { user }), 60_000, 'Loading your trades'),
+    withTimeout(getLogsAdaptive(client, contract, USER_EV.redeemed, from, latest, { user }), 60_000, 'Loading your trades'),
+  ])
+  const out: UserTrade[] = []
+  const base = (l: AnyLog) => ({ marketId: l.args.marketId as bigint, block: l.blockNumber, logIndex: l.logIndex, txHash: l.transactionHash, ts: 0 })
+  bought.forEach(l => out.push({ ...base(l), kind: 'buy', outcome: Number(l.args.outcomeIndex), usdc: l.args.usdcIn as bigint, shares: l.args.sharesOut as bigint }))
+  sold.forEach(l => out.push({ ...base(l), kind: 'sell', outcome: Number(l.args.outcomeIndex), usdc: l.args.usdcOut as bigint, shares: l.args.sharesIn as bigint }))
+  redeemed.forEach(l => out.push({ ...base(l), kind: 'redeem', outcome: -1, usdc: l.args.amount as bigint, shares: 0n }))
+  const blocks = [...new Set(out.map(t => t.block))]
+  const times = new Map<bigint, number>()
+  for (let i = 0; i < blocks.length; i += 25) {
+    await Promise.all(blocks.slice(i, i + 25).map(async b => {
+      const ck = `${contract}:${b}`; const hit = blockTimeCache.get(ck)
+      if (hit) { times.set(b, hit); return }
+      try { const t = Number((await withTimeout(client.getBlock({ blockNumber: b }), 15_000, 'Block lookup')).timestamp); blockTimeCache.set(ck, t); times.set(b, t) } catch { times.set(b, 0) }
+    }))
+  }
+  out.forEach(t => { t.ts = times.get(t.block) ?? 0 })
+  return out.sort((a, b) => (a.block === b.block ? b.logIndex - a.logIndex : a.block < b.block ? 1 : -1))
 }

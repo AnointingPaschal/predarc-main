@@ -139,6 +139,12 @@ export function useUserPositions(address: `0x${string}` | undefined) {
   })
 }
 
+/** Feature level of the active contract: 2+ supports editing and onchain comments; 0 = older contract. */
+export function useContractVersion() {
+  const r = useReadContract({ address: activeAddress(), abi: PREDARC_ABI, functionName: 'contractVersion', chainId: activeChain(), query: { enabled: !!activeAddress(), retry: false, staleTime: 60_000 } })
+  return { version: r.data !== undefined ? Number(r.data as bigint) : 0, loading: r.isLoading }
+}
+
 /**
  * Owner + minimum liquidity of the active contract, and whether the connected
  * wallet is the owner. createMarket is onlyOwner, so non-owners always revert.

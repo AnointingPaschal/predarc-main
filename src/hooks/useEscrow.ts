@@ -235,6 +235,49 @@ export function useAddLiquidity() {
   return { run, step, busy: step !== 'idle' }
 }
 
+/** Owner-only market editing (contract v2+): public details and/or trading times. */
+export function useUpdateMarketFlow() {
+  const wagmiConfig = useConfig()
+  const { writeContractAsync } = useWriteContract()
+  const [step, setStep] = useState('')
+  const run = async (marketId: bigint, o: { info?: { question: string; category: string; imageUrl: string }; times?: { endTime: bigint; resolutionTime: bigint } }) => {
+    const chainId = activeChainId(), address = activeContract()
+    const send = async (fn: 'updateMarketInfo' | 'updateMarketTimes', args: readonly unknown[], label: string) => {
+      setStep(label)
+      const hash = await writeContractAsync({ address, chainId, abi: PREDARC_ABI, functionName: fn, args } as never)
+      const r = await waitForTransactionReceipt(wagmiConfig, { hash, chainId })
+      if (r.status !== 'success') throw new Error(`${label} reverted onchain.`)
+    }
+    try {
+      if (o.info) await send('updateMarketInfo', [marketId, o.info.question, o.info.category, o.info.imageUrl], 'Saving details')
+      if (o.times) await send('updateMarketTimes', [marketId, o.times.endTime, o.times.resolutionTime], 'Saving times')
+    } finally { setStep('') }
+  }
+  return { run, step, busy: step !== '' }
+}
+
+/** Onchain comments (contract v2+). Each call is a wallet transaction. */
+export function useCommentTx() {
+  const wagmiConfig = useConfig()
+  const { writeContractAsync } = useWriteContract()
+  const [busy, setBusy] = useState(false)
+  const send = async (fn: 'postComment' | 'deleteComment' | 'reactToComment', args: readonly unknown[]) => {
+    const chainId = activeChainId()
+    setBusy(true)
+    try {
+      const hash = await writeContractAsync({ address: activeContract(), chainId, abi: PREDARC_ABI, functionName: fn, args } as never)
+      const r = await waitForTransactionReceipt(wagmiConfig, { hash, chainId })
+      if (r.status !== 'success') throw new Error('The transaction reverted onchain.')
+    } finally { setBusy(false) }
+  }
+  return {
+    busy,
+    post: (marketId: bigint, text: string, parentId: bigint) => send('postComment', [marketId, text, parentId]),
+    remove: (commentId: bigint) => send('deleteComment', [commentId]),
+    react: (commentId: bigint, liked: boolean) => send('reactToComment', [commentId, liked]),
+  }
+}
+
 export function useSetMinLiquidity() {
   const { writeContract, data: hash, isPending, isError, error, reset } = useWriteContract()
   const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({ hash })

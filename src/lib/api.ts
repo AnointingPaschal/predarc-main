@@ -91,3 +91,19 @@ export async function requestAnalysis(market: bigint, force = false): Promise<An
   if (!res.ok) throw new Error(body.error || `Request failed (${res.status})`)
   return { status: body.status ?? 'error', reason: body.reason, meta: body.meta ?? {} }
 }
+
+// ── Image upload (admin) ─────────────────────────────────────────────────────
+/** Resize in the browser (max 1000px, JPEG/PNG kept small) and upload; returns the absolute URL to store onchain. */
+export async function uploadMarketImage(file: File): Promise<string> {
+  if (!file.type.startsWith('image/')) throw new Error('Choose an image file.')
+  const bmp = await createImageBitmap(file)
+  const scale = Math.min(1, 1000 / Math.max(bmp.width, bmp.height))
+  const canvas = document.createElement('canvas')
+  canvas.width = Math.round(bmp.width * scale); canvas.height = Math.round(bmp.height * scale)
+  canvas.getContext('2d')!.drawImage(bmp, 0, 0, canvas.width, canvas.height)
+  const blob: Blob = await new Promise((res, rej) => canvas.toBlob(b => (b ? res(b) : rej(new Error('Could not process the image.'))), 'image/jpeg', 0.85))
+  const r = await fetch('/api/image', { method: 'POST', headers: { 'content-type': 'image/jpeg', ...adminAuthHeaders() }, body: blob })
+  const body = (await r.json().catch(() => ({}))) as { path?: string; error?: string }
+  if (!r.ok || !body.path) throw new Error(body.error || `Upload failed (${r.status})`)
+  return `${window.location.origin}${body.path}`
+}

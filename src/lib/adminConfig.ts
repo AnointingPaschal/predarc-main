@@ -260,7 +260,8 @@ export async function initConfig(): Promise<SiteConfig> {
   try {
     const res = await fetch('/api/config', { cache: 'no-store', signal: AbortSignal.timeout(4000) })
     if (res.ok) {
-      const data = (await res.json()) as { config?: Partial<SiteConfig> }
+      const data = (await res.json()) as { config?: Partial<SiteConfig>; serverTime?: number }
+      noteServerTime(data.serverTime, res)
       setCurrent(mergeConfig(data.config))
     }
   } catch { /* offline / local dev without functions: keep defaults */ }
@@ -268,12 +269,24 @@ export async function initConfig(): Promise<SiteConfig> {
   return current
 }
 
+// ── Server clock ─────────────────────────────────────────────────────────────
+// Admin sessions are time-limited and checked by the server, so they must be
+// stamped with the server's time, not a possibly-wrong device clock.
+let clockSkew = 0 // serverTime - deviceTime (ms)
+function noteServerTime(t: unknown, res?: Response) {
+  const fromBody = typeof t === 'number' ? t : NaN
+  const hdr = res?.headers.get('date')
+  const server = Number.isFinite(fromBody) ? fromBody : hdr ? Date.parse(hdr) : NaN
+  if (Number.isFinite(server)) clockSkew = server - Date.now()
+}
+const serverNow = () => Date.now() + clockSkew
+
 // ── Admin session (in memory only) ───────────────────────────────────────────
 export interface AdminSession { address: string; message: string; signature: string; expires: number }
 let session: AdminSession | null = null
 
 export function getAdminSession(address?: string): AdminSession | null {
-  if (!session || session.expires < Date.now() + 30_000) return null
+  if (!session || session.expires < serverNow() + 30_000) return null
   if (address && session.address !== address.toLowerCase()) return null
   return session
 }
@@ -319,7 +332,13 @@ export async function signInAsAdmin(
   address: string,
   signMessage: (args: { message: string }) => Promise<string>,
 ): Promise<void> {
-  const issued = Date.now()
+  // Sync with the server clock first so a wrong device clock cannot break sign-in
+  try {
+    const r = await fetch('/api/config', { cache: 'no-store' })
+    const b = (await r.json().catch(() => ({}))) as { serverTime?: number }
+    noteServerTime(b.serverTime, r)
+  } catch { /* fall back to device clock */ }
+  const issued = serverNow()
   const expires = issued + 60 * 60 * 1000
   const message = [
     'Predarc admin session',

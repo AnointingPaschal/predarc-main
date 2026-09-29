@@ -21,6 +21,7 @@ export const PUBLIC_KEY = 'config:public'
 export const SECRET_KEY = 'config:secret'
 export const MAX_BODY_BYTES = 2_000_000 // logo is stored as a data URL
 export const SESSION_MAX_MS = 60 * 60 * 1000 // admin session lifetime: 1 hour
+export const CLOCK_TOLERANCE_MS = 5 * 60 * 1000 // allowed device/server clock difference
 
 // Fields that must never leave the server on the public endpoint.
 export const SECRET_FIELDS = ['openrouterApiKey'] as const
@@ -78,8 +79,15 @@ export async function requireAdmin(request: Request, env: Env): Promise<Response
   if (msgAddr !== admin) return json({ error: 'Message address mismatch.' }, 403)
   if (host !== new URL(request.url).host) return json({ error: 'Message is for another host.' }, 403)
   if (!Number.isFinite(issued) || !Number.isFinite(expires)) return json({ error: 'Bad timestamps.' }, 400)
-  if (issued > now + 60_000 || expires < now || expires - issued > SESSION_MAX_MS) {
-    return json({ error: 'Admin session expired. Sign again.' }, 401)
+  const skewMin = Math.round((issued - now) / 60_000)
+  if (issued > now + CLOCK_TOLERANCE_MS) {
+    return json({ error: `Your device clock is about ${skewMin} min ahead of the server. Fix your date/time settings (enable automatic time) and sign in again.`, serverTime: now }, 401)
+  }
+  if (expires - issued > SESSION_MAX_MS + CLOCK_TOLERANCE_MS) return json({ error: 'Session lifetime too long.', serverTime: now }, 401)
+  if (expires < now) {
+    return json({ error: issued < now - SESSION_MAX_MS - CLOCK_TOLERANCE_MS
+      ? `Your device clock is about ${Math.round((now - issued) / 60_000)} min behind the server. Fix your date/time settings and sign in again.`
+      : 'Admin session expired. Sign in again.', serverTime: now }, 401)
   }
 
   try {

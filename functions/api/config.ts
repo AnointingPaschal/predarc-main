@@ -8,5 +8,5 @@ export const onRequestGet = async ({ env }: { env: Env }): Promise<Response> => 
   // The server env var is the only source of truth for who the admin is.
   const admin = adminWalletOf(env)
   if (admin) config.adminWallet = admin
-  return json({ config })
+  return json({ config, serverTime: Date.now() })
 }

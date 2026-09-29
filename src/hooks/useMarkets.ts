@@ -1,7 +1,7 @@
-import { useReadContract } from 'wagmi'
+import { useAccount, useReadContract } from 'wagmi'
 import { erc20Abi } from 'viem'
-import { PREDARC_ABI, USDC_ADDRESS } from '../lib/contract'
-import { activeContract, activeChainId } from '../lib/adminConfig'
+import { PREDARC_ABI } from '../lib/contract'
+import { activeContract, activeChainId, activeUsdc } from '../lib/adminConfig'
 
 function activeAddress() { return activeContract() }
 function activeChain() { return activeChainId() }
@@ -81,7 +81,7 @@ export function useUsdcOut(marketId: bigint | undefined, outcomeIndex: number, s
 
 export function useUsdcBalance(address: `0x${string}` | undefined) {
   return useReadContract({
-    address: USDC_ADDRESS,
+    address: activeUsdc(),
     abi: erc20Abi,
     functionName: 'balanceOf',
     args: address ? [address] : undefined,
@@ -92,7 +92,7 @@ export function useUsdcBalance(address: `0x${string}` | undefined) {
 
 export function useUsdcAllowance(owner: `0x${string}` | undefined) {
   return useReadContract({
-    address: USDC_ADDRESS,
+    address: activeUsdc(),
     abi: erc20Abi,
     functionName: 'allowance',
     args: (owner) ? [owner, activeAddress()] : undefined,
@@ -137,4 +137,23 @@ export function useUserPositions(address: `0x${string}` | undefined) {
     chainId: activeChain(),
     query: { enabled: !!address },
   })
+}
+
+/**
+ * Owner + minimum liquidity of the active contract, and whether the connected
+ * wallet is the owner. createMarket is onlyOwner, so non-owners always revert.
+ */
+export function useContractGuard() {
+  const { address } = useAccount()
+  const enabled = !!activeAddress()
+  const owner = useReadContract({ address: activeAddress(), abi: PREDARC_ABI, functionName: 'owner', chainId: activeChain(), query: { enabled } })
+  const minLiq = useReadContract({ address: activeAddress(), abi: PREDARC_ABI, functionName: 'minLiquidity', chainId: activeChain(), query: { enabled } })
+  const ownerAddr = owner.data as `0x${string}` | undefined
+  return {
+    loading: owner.isLoading || minLiq.isLoading,
+    hasContract: enabled,
+    owner: ownerAddr,
+    isOwner: !!address && !!ownerAddr && ownerAddr.toLowerCase() === address.toLowerCase(),
+    minLiquidityUsdc: minLiq.data !== undefined ? Number(minLiq.data as bigint) / 1e6 : undefined,
+  }
 }

@@ -1,8 +1,11 @@
-// Admin-configurable site settings.
+// Site settings.
 // Source of truth is Cloudflare KV, served by /api/config (public, no secrets)
 // and /api/admin/config (admin wallet signature required). Nothing is stored in
 // the browser: the config lives in a module-level in-memory cache.
 import { useSyncExternalStore } from 'react'
+
+export type Network = 'mainnet' | 'testnet'
+export const CHAIN_IDS: Record<Network, number> = { mainnet: 5042, testnet: 5042002 }
 
 // Per-mode theme token set
 export interface ThemeColors {
@@ -16,6 +19,17 @@ export interface ThemeColors {
   success: string
   danger: string
   warning: string
+}
+
+/** Everything that differs between Arc Mainnet and Arc Testnet. */
+export interface NetworkSettings {
+  contractAddress: string
+  rpcUrl: string
+  usdcAddress: string
+  feeRecipient: string
+  chainlinkBtcFeed: string
+  chainlinkEthFeed: string
+  minLiquidityUsdc: number // UI-side minimum for market creation (the contract enforces its own)
 }
 
 export interface SiteConfig {
@@ -37,21 +51,13 @@ export interface SiteConfig {
   discordUrl: string
   githubUrl: string
 
-  // Network mode
-  network: 'mainnet' | 'testnet'
+  // Which network the whole site is on (changed only in Admin → Config)
+  network: Network
 
-  // Onchain config — separate per network
-  contractAddress: string       // mainnet contract
-  testnetContractAddress: string // testnet contract
-  rpcUrl: string
-  chainId: number
-  usdcAddress: string
-  feeBps: number
-  feeRecipient: string
-  adminWallet: string
-  chainlinkBtcFeed: string
-  chainlinkEthFeed: string
-  minLiquidityUsdc: number  // minimum USDC for market creation (default 1)
+  // Onchain config — each network has its own settings
+  mainnet: NetworkSettings
+  testnet: NetworkSettings
+  adminWallet: string // read-only in the UI; set by the ADMIN_WALLET env var
 
   // AI config
   openrouterApiKey: string
@@ -88,7 +94,7 @@ export const DEFAULT_LIGHT: ThemeColors = {
 }
 
 // Values baked in at build time from Cloudflare environment variables.
-// These are only the first-run defaults, used until an admin saves config to
+// These are only first-run defaults, used until an admin saves config to
 // Cloudflare KV (saved values win).
 const ENV = {
   contractAddress:        (import.meta.env.VITE_CONTRACT_ADDRESS        as string | undefined) ?? '',
@@ -115,18 +121,26 @@ export const DEFAULT_CONFIG: SiteConfig = {
   twitterUrl: '',
   discordUrl: '',
   githubUrl: '',
-  network: (ENV.network === 'testnet' ? 'testnet' : 'mainnet'),
-  contractAddress:        ENV.contractAddress,
-  testnetContractAddress: ENV.testnetContractAddress || '0xa78c2aa7a9ccff28ba42e59ae0a8c86f0da4e275',
-  rpcUrl:           ENV.rpcUrl,
-  chainId: 5042,
-  usdcAddress:      ENV.usdcAddress,
-  feeBps: 200,
-  feeRecipient:     ENV.feeRecipient,
-  adminWallet:      ENV.adminWallet,
-  chainlinkBtcFeed: ENV.chainlinkBtcFeed,
-  chainlinkEthFeed: ENV.chainlinkEthFeed,
-  minLiquidityUsdc: 1,
+  network: ENV.network === 'testnet' ? 'testnet' : 'mainnet',
+  mainnet: {
+    contractAddress:  ENV.contractAddress,
+    rpcUrl:           ENV.rpcUrl,
+    usdcAddress:      ENV.usdcAddress,
+    feeRecipient:     ENV.feeRecipient,
+    chainlinkBtcFeed: ENV.chainlinkBtcFeed,
+    chainlinkEthFeed: ENV.chainlinkEthFeed,
+    minLiquidityUsdc: 10, // matches the contract's built-in default
+  },
+  testnet: {
+    contractAddress:  ENV.testnetContractAddress,
+    rpcUrl:           'https://rpc.testnet.arc.network',
+    usdcAddress:      '0x3600000000000000000000000000000000000000',
+    feeRecipient:     ENV.feeRecipient,
+    chainlinkBtcFeed: '',
+    chainlinkEthFeed: '',
+    minLiquidityUsdc: 10,
+  },
+  adminWallet: ENV.adminWallet,
   openrouterApiKey: '',
   openrouterModel: 'openai/gpt-4o-mini',
   aiAutoGenEnabled: false,
@@ -134,73 +148,66 @@ export const DEFAULT_CONFIG: SiteConfig = {
   aiAutoGenCategories: 'Crypto,Sports,Politics',
 }
 
-// Returns the active contract address for the current network mode
+// ── Per-network helpers ──────────────────────────────────────────────────────
+
+/** Settings block for a network (defaults to the config's active one). */
+export function getNetworkSettings(config: SiteConfig, network: Network = config.network): NetworkSettings {
+  return network === 'testnet' ? config.testnet : config.mainnet
+}
+
 export function getActiveContractAddress(config: SiteConfig): string {
-  return config.network === 'testnet' ? config.testnetContractAddress : config.contractAddress
+  return getNetworkSettings(config).contractAddress.trim()
 }
 
-// Returns chain ID for the current network mode
 export function getActiveChainId(config: SiteConfig): number {
-  return config.network === 'testnet' ? 5042002 : 5042
+  return CHAIN_IDS[config.network]
 }
 
-// Returns RPC URL for the current network mode
 export function getActiveRpcUrl(config: SiteConfig): string {
-  return config.network === 'testnet' ? 'https://rpc.testnet.arc.network' : config.rpcUrl
+  return getNetworkSettings(config).rpcUrl.trim()
 }
 
-function mergeConfig(parsed: Partial<SiteConfig> | null | undefined): SiteConfig {
+// ── Merging (with migration from the old flat config shape) ──────────────────
+
+type Legacy = Partial<SiteConfig> & {
+  contractAddress?: string; testnetContractAddress?: string; rpcUrl?: string; usdcAddress?: string
+  feeRecipient?: string; chainlinkBtcFeed?: string; chainlinkEthFeed?: string; minLiquidityUsdc?: number
+}
+
+function mergeConfig(parsed: Legacy | null | undefined): SiteConfig {
   const p = parsed ?? {}
+  const d = DEFAULT_CONFIG
+  // Configs saved before per-network settings used flat fields (mainnet + one testnet address)
+  const legacyMain: Partial<NetworkSettings> = {}
+  const legacyTest: Partial<NetworkSettings> = {}
+  if (!p.mainnet) {
+    if (p.contractAddress !== undefined)  legacyMain.contractAddress = p.contractAddress
+    if (p.rpcUrl !== undefined)           legacyMain.rpcUrl = p.rpcUrl
+    if (p.usdcAddress !== undefined)      legacyMain.usdcAddress = p.usdcAddress
+    if (p.feeRecipient !== undefined)     { legacyMain.feeRecipient = p.feeRecipient; legacyTest.feeRecipient = p.feeRecipient }
+    if (p.chainlinkBtcFeed !== undefined) legacyMain.chainlinkBtcFeed = p.chainlinkBtcFeed
+    if (p.chainlinkEthFeed !== undefined) legacyMain.chainlinkEthFeed = p.chainlinkEthFeed
+    if (p.minLiquidityUsdc !== undefined) legacyMain.minLiquidityUsdc = p.minLiquidityUsdc
+  }
+  if (!p.testnet && p.testnetContractAddress !== undefined) legacyTest.contractAddress = p.testnetContractAddress
+
+  const rest: Record<string, unknown> = { ...p }
+  for (const k of ['contractAddress', 'testnetContractAddress', 'rpcUrl', 'usdcAddress', 'feeRecipient',
+    'chainlinkBtcFeed', 'chainlinkEthFeed', 'minLiquidityUsdc', 'chainId', 'feeBps']) delete rest[k]
+
   return {
-    ...DEFAULT_CONFIG,
-    ...p,
+    ...d,
+    ...(rest as Partial<SiteConfig>),
+    mainnet: { ...d.mainnet, ...legacyMain, ...(p.mainnet ?? {}) },
+    testnet: { ...d.testnet, ...legacyTest, ...(p.testnet ?? {}) },
     darkTheme:  { ...DEFAULT_DARK,  ...(p.darkTheme  ?? {}) },
     lightTheme: { ...DEFAULT_LIGHT, ...(p.lightTheme ?? {}) },
   }
 }
 
 // ── In-memory store ──────────────────────────────────────────────────────────
-// `current` is the saved (server) config. Each visitor can additionally pick a
-// network to view; that choice is kept in a cookie and overrides `network`.
 let current: SiteConfig = mergeConfig(null)
 const listeners = new Set<() => void>()
-
-export type Network = 'mainnet' | 'testnet'
-const NET_COOKIE = 'predarc_network'
-
-function readSelectedNetwork(): Network | null {
-  try {
-    const q = new URLSearchParams(window.location.search).get('network')
-    if (q === 'mainnet' || q === 'testnet') return q
-    const m = document.cookie.match(new RegExp(`(?:^|; )${NET_COOKIE}=(mainnet|testnet)`))
-    return (m?.[1] as Network | undefined) ?? null
-  } catch { return null }
-}
-let selectedNetwork: Network | null = readSelectedNetwork()
-
-// Only the admin wallet may pick a network to view. Everyone else always sees
-// the admin's saved default network (Admin → Config).
-let adminView = false
-export function setAdminView(v: boolean): void {
-  if (adminView === v) return
-  adminView = v
-  listeners.forEach(l => l())
-}
-
-/** The network being viewed: the admin's own pick (admin only), else the saved default. */
-export function getEffectiveNetwork(): Network {
-  return (adminView && selectedNetwork) || current.network
-}
-
-export function setSelectedNetwork(n: Network): void {
-  selectedNetwork = n
-  try { document.cookie = `${NET_COOKIE}=${n}; path=/; max-age=31536000; SameSite=Lax` } catch { /* ignore */ }
-  listeners.forEach(l => l())
-}
-
-export function useNetwork(): Network {
-  return useSyncExternalStore(subscribeConfig, getEffectiveNetwork, getEffectiveNetwork)
-}
 
 function setCurrent(c: SiteConfig) {
   current = c
@@ -212,37 +219,44 @@ export function subscribeConfig(cb: () => void): () => void {
   return () => { listeners.delete(cb) }
 }
 
-/** Raw saved config (what the admin edits — no per-visitor network override). */
-export function loadRawConfig(): SiteConfig {
+/** The current site config (loaded from Cloudflare). */
+export function loadConfig(): SiteConfig {
   return current
 }
 
-// Cached so useSyncExternalStore gets a stable reference between changes
-let effCache: { base: SiteConfig; net: Network; value: SiteConfig } | null = null
-
-/** Synchronous read of the config as this visitor sees it (network override applied). */
-export function loadConfig(): SiteConfig {
-  const net = getEffectiveNetwork()
-  if (!effCache || effCache.base !== current || effCache.net !== net) {
-    effCache = { base: current, net, value: net === current.network ? current : { ...current, network: net } }
-  }
-  return effCache.value
-}
-
-/** React hook: re-renders when the config or the viewed network changes. */
+/** React hook: re-renders when the config changes. */
 export function useSiteConfig(): SiteConfig {
   return useSyncExternalStore(subscribeConfig, loadConfig, loadConfig)
 }
 
+/** The network the whole site is on — a single setting, changed only in Admin → Config. */
+export function getEffectiveNetwork(): Network {
+  return current.network
+}
+
+export function useNetwork(): Network {
+  return useSyncExternalStore(subscribeConfig, getEffectiveNetwork, getEffectiveNetwork)
+}
+
+/** Settings of the network the site is currently on. */
+export function activeSettings(): NetworkSettings {
+  return getNetworkSettings(current)
+}
+
+export function activeUsdc(): `0x${string}` {
+  return (activeSettings().usdcAddress.trim() || '0x3600000000000000000000000000000000000000') as `0x${string}`
+}
 export function activeContract(): `0x${string}` {
-  return getActiveContractAddress(loadConfig()) as `0x${string}`
+  return getActiveContractAddress(current) as `0x${string}`
 }
 export function activeChainId(): number {
-  return getActiveChainId(loadConfig())
+  return getActiveChainId(current)
 }
 
 /** Fetch the public config from Cloudflare. Never throws; falls back to defaults. */
 export async function initConfig(): Promise<SiteConfig> {
+  // Older versions kept settings in localStorage; that copy is obsolete.
+  try { localStorage.removeItem('predarc_admin_config') } catch { /* ignore */ }
   try {
     const res = await fetch('/api/config', { cache: 'no-store', signal: AbortSignal.timeout(4000) })
     if (res.ok) {
@@ -337,8 +351,8 @@ export async function fetchAdminConfig(): Promise<SiteConfig> {
 
 /** Fields compared when verifying that a save really reached Cloudflare. */
 const VERIFY_FIELDS: (keyof SiteConfig)[] = [
-  'siteName', 'network', 'contractAddress', 'testnetContractAddress', 'feeRecipient',
-  'openrouterApiKey', 'openrouterModel', 'aiAutoGenEnabled', 'chainlinkBtcFeed', 'chainlinkEthFeed',
+  'siteName', 'network', 'mainnet', 'testnet',
+  'openrouterApiKey', 'openrouterModel', 'aiAutoGenEnabled',
 ]
 
 /** Save config to Cloudflare KV, then read it back to prove it persisted. */
@@ -356,36 +370,6 @@ export async function saveConfig(config: SiteConfig): Promise<void> {
   if (bad.length) throw new Error(`Save did not persist (${bad.join(', ')}). Check the PREDARC_KV binding in Cloudflare and redeploy.`)
   setCurrent(stored)
   applyThemeVars(current)
-}
-
-const LEGACY_KEY = 'predarc_admin_config'
-
-/**
- * One-time migration: older versions kept settings in this browser's localStorage.
- * Merge them under the server values (server wins), then delete the local copy.
- * Returns true if anything was imported. The admin must still press Save.
- */
-export function importLegacyConfig(): boolean {
-  try {
-    const raw = localStorage.getItem(LEGACY_KEY)
-    if (!raw) return false
-    const legacy = JSON.parse(raw) as Partial<SiteConfig>
-    const defaults = mergeConfig(null) as unknown as Record<string, unknown>
-    const cur = current as unknown as Record<string, unknown>
-    const merged: Record<string, unknown> = { ...cur }
-    let changed = false
-    for (const [k, v] of Object.entries(legacy)) {
-      if (k === 'adminWallet' || v === '' || v == null || typeof v === 'object') continue
-      // only fill values the server does not have yet (still at default/empty)
-      if (JSON.stringify(cur[k]) === JSON.stringify(defaults[k]) && JSON.stringify(v) !== JSON.stringify(cur[k])) {
-        merged[k] = v
-        changed = true
-      }
-    }
-    localStorage.removeItem(LEGACY_KEY)
-    if (changed) setCurrent(mergeConfig(merged as Partial<SiteConfig>))
-    return changed
-  } catch { return false }
 }
 
 /** Delete saved config from Cloudflare KV, returning to defaults. */

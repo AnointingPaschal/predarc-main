@@ -75,3 +75,9 @@ Local dev with the API: `bun run build && npx wrangler pages dev dist --kv PREDA
 bun install
 bun run dev
 ```
+
+## Networks and contracts
+
+- The site is on ONE network at a time, chosen in Admin → Config → "Site network" (there is no switch in the header). Each network has its own settings (contract, RPC URL, USDC, fee recipient, min liquidity, Chainlink feeds).
+- `createMarket`, resolve, cancel and fee withdrawal are `onlyOwner`: the wallet that deployed the contract is the only one that can call them. Use Config → "Check contract" to see the onchain owner, minimum liquidity and fee.
+- Remix build of the contract: `docs/remix/PredarcMarketRemix.sol` (needs viaIR, see `docs/remix/compiler_config.json`).

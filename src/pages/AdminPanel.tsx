@@ -1,19 +1,16 @@
 import { useState, useRef, useEffect } from 'react'
-import { useAccount, useConfig, useSignMessage, useWriteContract as useWriteContractAsync } from 'wagmi'
-import { waitForTransactionReceipt } from 'wagmi/actions'
-import { erc20Abi } from 'viem'
-import { PREDARC_ADDRESS, PREDARC_ABI, USDC_ADDRESS } from '../lib/contract'
+import { useAccount, useSignMessage, useSwitchChain } from 'wagmi'
 import { ConnectKitButton } from 'connectkit'
 import { toast } from 'sonner'
 import { Shield, Plus, Settings, DollarSign, BarChart2, Palette, Save, Upload, RefreshCw, Sparkles } from 'lucide-react'
-import { useAllMarkets, usePlatformFee, useFeeRecipient, useAccruedFees } from '../hooks/useMarkets'
+import { useAllMarkets, usePlatformFee, useFeeRecipient, useAccruedFees, useContractGuard } from '../hooks/useMarkets'
 import {
-  useCreateMarket, useResolveMarket, useResolveScalarMarket,
+  useCreateMarketFlow, useResolveMarket, useResolveScalarMarket,
   useCancelMarket, useCloseMarket, useFeatureMarket, useSetFee, useWithdrawFees
 } from '../hooks/useEscrow'
-import { useApproveUsdc } from '../hooks/useEscrow'
 import { Market, MarketStatus, MarketType, formatUsdc, parseUsdc, CATEGORIES } from '../lib/contract'
-import { loadConfig, loadRawConfig, useNetwork, activeChainId, saveConfig, resetConfig, useSiteConfig, isAdminAddress, getAdminSession, signInAsAdmin, importLegacyConfig, DEFAULT_DARK, DEFAULT_LIGHT, SiteConfig, ThemeColors, getActiveContractAddress } from '../lib/adminConfig'
+import { loadConfig, useNetwork, activeSettings, saveConfig, resetConfig, useSiteConfig, isAdminAddress, getAdminSession, signInAsAdmin, DEFAULT_DARK, DEFAULT_LIGHT, CHAIN_IDS, SiteConfig, ThemeColors, NetworkSettings, Network, getActiveContractAddress } from '../lib/adminConfig'
+import { checkContract, type CheckLine } from '../lib/contractCheck'
 import { OPENROUTER_MODELS, testOpenRouterConnection, type ConnectionStep } from '../lib/aiMarkets'
 import AIMarketGenerator from '../components/AIMarketGenerator'
 import type { AIMarketDraft } from '../lib/aiMarkets'
@@ -40,7 +37,6 @@ export default function AdminPanel() {
     setSignError('')
     try {
       await signInAsAdmin(address, args => signMessageAsync(args))
-      if (importLegacyConfig()) toast.info('Imported old settings from this browser. Open Config and press Save to store them in Cloudflare.', { duration: 10000 })
       bump(n => n + 1)
     } catch (e) {
       setSignError(e instanceof Error ? e.message : 'Sign-in failed')
@@ -248,56 +244,34 @@ function MarketsTab() {
 }
 
 function AITab() {
-  const { writeContractAsync } = useWriteContractAsync()
-  const wagmiConfig = useConfig()
-  const { address, chainId } = useAccount()
+  const flow = useCreateMarketFlow()
+  const guard = useContractGuard()
+  const { chainId } = useAccount()
   const network = useNetwork()
 
   const publishDrafts = async (drafts: AIMarketDraft[]) => {
-    const target = activeChainId()
+    const target = CHAIN_IDS[network]
     if (!activeAddress()) { toast.error(`No ${network} contract set. Add it in Config.`); return }
     if (chainId !== target) { toast.error(`Switch your wallet to Arc ${network === 'testnet' ? 'Testnet' : 'Mainnet'} first.`); return }
-    const wait = async (hash: `0x${string}`) => {
-      const r = await waitForTransactionReceipt(wagmiConfig, { hash, chainId: target })
-      if (r.status !== 'success') throw new Error('Transaction reverted')
-    }
+    if (guard.owner && !guard.isOwner) { toast.error(parseOnchainError({ message: 'OwnableUnauthorizedAccount' })); return }
     let published = 0
     try {
       for (const draft of drafts) {
-        const now = new Date()
-        const endDate = new Date(now.getTime() + draft.suggestedDurationDays * 24 * 60 * 60 * 1000)
+        const endDate = new Date(Date.now() + draft.suggestedDurationDays * 24 * 60 * 60 * 1000)
         const resDate = new Date(endDate.getTime() + 24 * 60 * 60 * 1000)
-        const endTs = BigInt(Math.floor(endDate.getTime() / 1000))
-        const resTs = BigInt(Math.floor(resDate.getTime() / 1000))
-        const liquidity = parseUsdc(String(draft.suggestedLiquidity))
-
-        // Approve USDC and wait until it is mined, otherwise createMarket reverts
-        await wait(await writeContractAsync({
-          address: USDC_ADDRESS,
-          chainId: target,
-          abi: erc20Abi,
-          functionName: 'approve',
-          args: [activeAddress(), liquidity],
-        }))
-
-        await wait(await writeContractAsync({
-          address: activeAddress(),
-          chainId: target,
-          abi: PREDARC_ABI,
-          functionName: 'createMarket',
-          args: [
-            draft.marketType,
-            draft.question,
-            draft.outcomes,
-            endTs,
-            resTs,
-            BigInt(Math.round(draft.scalarLow)),
-            BigInt(Math.round(draft.scalarHigh)),
-            draft.category,
-            draft.imageUrl,
-            liquidity,
-          ],
-        }))
+        const minLiq = Math.max(guard.minLiquidityUsdc ?? 0, activeSettings().minLiquidityUsdc)
+        await flow.run({
+          marketType: draft.marketType,
+          question: draft.question,
+          outcomes: draft.outcomes,
+          endTime: BigInt(Math.floor(endDate.getTime() / 1000)),
+          resolutionTime: BigInt(Math.floor(resDate.getTime() / 1000)),
+          scalarLow: BigInt(Math.round(draft.scalarLow)),
+          scalarHigh: BigInt(Math.round(draft.scalarHigh)),
+          category: draft.category,
+          imageUrl: draft.imageUrl.startsWith('data:') ? '' : draft.imageUrl,
+          initialLiquidity: parseUsdc(String(Math.max(draft.suggestedLiquidity, minLiq))),
+        })
         published++
         toast.success(`Published ${published}/${drafts.length} on ${network}`)
       }
@@ -305,7 +279,6 @@ function AITab() {
       toast.error(`Stopped after ${published}/${drafts.length}: ${parseOnchainError(e)}`)
     }
   }
-  void address
 
   return (
     <div className="space-y-4">
@@ -324,12 +297,11 @@ function AITab() {
 }
 
 function CreateTab() {
-  const approve = useApproveUsdc()
-  const create = useCreateMarket()
+  const flow = useCreateMarketFlow()
+  const guard = useContractGuard()
   const imageFileRef = useRef<HTMLInputElement>(null)
   const [imageMode, setImageMode] = useState<'url' | 'upload'>('url')
-  const cfg = loadConfig()
-  const minLiq = cfg.minLiquidityUsdc ?? 1
+  const minLiq = Math.max(guard.minLiquidityUsdc ?? 0, activeSettings().minLiquidityUsdc)
   const [form, setForm] = useState({
     marketType: '0',
     question: '',
@@ -342,15 +314,6 @@ function CreateTab() {
     imageUrl: '',
     initialLiquidity: String(minLiq),
   })
-
-  useEffect(() => {
-    if (create.isSuccess) {
-      toast.success('Market created!')
-    }
-    if (create.error) toast.error(parseOnchainError(create.error))
-    if (approve.error) toast.error(parseOnchainError(approve.error))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [create.isSuccess, create.error, approve.error])
 
   const setOutcome = (i: number, val: string) => {
     setForm(f => {
@@ -370,34 +333,40 @@ function CreateTab() {
     setForm(f => ({ ...f, outcomes: f.outcomes.filter((_, idx) => idx !== i) }))
   }
 
-  const handleCreate = () => {
+  const handleCreate = async () => {
     if (!form.question.trim()) return toast.error('Question is required.')
     if (!form.endTime || !form.resolutionTime) return toast.error('Dates are required.')
+    if (guard.owner && !guard.isOwner) return toast.error(parseOnchainError({ message: 'OwnableUnauthorizedAccount' }))
 
     const endTs = BigInt(Math.floor(new Date(form.endTime).getTime() / 1000))
     const resTs = BigInt(Math.floor(new Date(form.resolutionTime).getTime() / 1000))
-    const liquidity = parseUsdc(form.initialLiquidity)
+    const now = Math.floor(Date.now() / 1000)
+    if (Number(endTs) <= now + 3600) return toast.error('Trading must end at least 1 hour from now.')
+    if (resTs < endTs) return toast.error('Resolution time must be at or after the trading end time.')
+    if (parseFloat(form.initialLiquidity) < minLiq) return toast.error(`Initial liquidity must be at least ${minLiq} USDC.`)
+    if (form.imageUrl.length > 1500) return toast.error('That image is too large to store onchain. Use an Image URL instead of uploading a file.')
+    if (form.outcomes.some(o => !o.trim())) return toast.error('Every outcome needs a name.')
 
-    // Approve first (exact amount only)
-    approve.approve(liquidity)
-
-    setTimeout(() => {
-      create.create(
-        parseInt(form.marketType),
-        form.question,
-        form.outcomes,
-        endTs,
-        resTs,
-        BigInt(parseInt(form.scalarLow)),
-        BigInt(parseInt(form.scalarHigh)),
-        form.category,
-        form.imageUrl,
-        liquidity,
-      )
-    }, 3000) // wait for approve confirmation
+    try {
+      await flow.run({
+        marketType: parseInt(form.marketType),
+        question: form.question.trim(),
+        outcomes: form.outcomes.map(o => o.trim()),
+        endTime: endTs,
+        resolutionTime: resTs,
+        scalarLow: BigInt(parseInt(form.scalarLow) || 0),
+        scalarHigh: BigInt(parseInt(form.scalarHigh) || 0),
+        category: form.category,
+        imageUrl: form.imageUrl,
+        initialLiquidity: parseUsdc(form.initialLiquidity),
+      })
+      toast.success('Market created!')
+    } catch (e) {
+      toast.error(parseOnchainError(e), { duration: 10000 })
+    }
   }
 
-  const isLoading = approve.isPending || approve.isConfirming || create.isPending || create.isConfirming
+  const isLoading = flow.busy
 
   const applyDraft = (draft: AIMarketDraft) => {
     const now = new Date()
@@ -425,6 +394,19 @@ function CreateTab() {
 
     <div className="rounded-xl p-5 space-y-4" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
       <h2 className="text-sm font-semibold" style={{ color: 'var(--ink)' }}>Create New Market</h2>
+      {!guard.hasContract && (
+        <p className="text-xs rounded-lg px-3 py-2" style={{ color: 'var(--danger)', background: 'var(--surface-muted)', border: '1px solid var(--border)' }}>
+          No contract address is set for this network. Add it in Config.
+        </p>
+      )}
+      {guard.owner && !guard.isOwner && (
+        <p className="text-xs rounded-lg px-3 py-2 break-all" style={{ color: 'var(--danger)', background: 'var(--surface-muted)', border: '1px solid var(--danger)' }}>
+          The connected wallet is not the owner of this contract, so creating markets will fail. Owner: {guard.owner}. Connect that wallet, or deploy your own contract from your admin wallet and put its address in Config.
+        </p>
+      )}
+      {guard.minLiquidityUsdc !== undefined && (
+        <p className="text-[11px]" style={{ color: 'var(--subtle)' }}>Minimum initial liquidity on this contract: {guard.minLiquidityUsdc} USDC. Trading must end at least 1 hour from now.</p>
+      )}
 
       <Field label="Market Type">
         <select value={form.marketType} onChange={e => setForm(f => ({ ...f, marketType: e.target.value, outcomes: e.target.value === '0' ? ['Yes', 'No'] : f.outcomes }))} className={selectCls}>
@@ -543,12 +525,12 @@ function CreateTab() {
       </Field>
 
       <button
-        onClick={handleCreate}
+        onClick={() => void handleCreate()}
         disabled={isLoading}
         className="w-full py-3 rounded-lg text-sm font-semibold disabled:opacity-50"
         style={{ background: 'var(--accent)', color: '#0d1b2f' }}
       >
-        {isLoading ? 'Creating...' : 'Create Market'}
+        {flow.step === 'approving' ? 'Approve USDC in wallet…' : flow.step === 'creating' ? 'Creating market…' : 'Create Market'}
       </button>
     </div>
     </div>
@@ -693,7 +675,7 @@ function ThemeEditor({
 }
 
 function BrandingTab() {
-  const [config, setConfig] = useState<SiteConfig>(loadRawConfig)
+  const [config, setConfig] = useState<SiteConfig>(loadConfig)
   const [themeTab, setThemeTab] = useState<ThemeMode>('dark')
   const fileRef = useRef<HTMLInputElement>(null)
 
@@ -816,18 +798,46 @@ function BrandingTab() {
 }
 
 function ConfigTab() {
-  const [config, setConfig] = useState<SiteConfig>(loadRawConfig)
+  const [config, setConfig] = useState<SiteConfig>(loadConfig)
   const [testing, setTesting] = useState(false)
   const [testSteps, setTestSteps] = useState<ConnectionStep[] | null>(null)
+  // Which network's settings are being edited (independent of the site's active network)
+  const [editNet, setEditNet] = useState<Network>(loadConfig().network)
+  const [checking, setChecking] = useState(false)
+  const [checkLines, setCheckLines] = useState<CheckLine[] | null>(null)
+  const { chainId } = useAccount()
+  const { switchChainAsync } = useSwitchChain()
+  const ns = config[editNet]
+  const setNs = (patch: Partial<NetworkSettings>) => setConfig(c => ({ ...c, [editNet]: { ...c[editNet], ...patch } }))
 
   const handleSave = async () => {
+    const before = loadConfig().network
+    if (config.network !== before) {
+      const ok = window.confirm(`This switches the WHOLE site to Arc ${config.network === 'testnet' ? 'Testnet' : 'Mainnet'} for every visitor. Continue?`)
+      if (!ok) return
+    }
     try {
       await saveConfig(config)
-      setConfig(loadRawConfig())
+      setConfig(loadConfig())
       toast.success('Config saved to Cloudflare and verified ✓')
+      const target = CHAIN_IDS[config.network]
+      if (config.network !== before && chainId !== target) {
+        try { await switchChainAsync({ chainId: target }) }
+        catch { toast.info(`Site is now on ${config.network}. Switch your wallet to Arc ${config.network === 'testnet' ? 'Testnet' : 'Mainnet'} to transact.`) }
+      }
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Save failed')
     }
+  }
+
+  const runCheck = async () => {
+    setChecking(true); setCheckLines(null)
+    try {
+      setCheckLines(await checkContract({
+        network: editNet, rpcUrl: ns.rpcUrl, contractAddress: ns.contractAddress,
+        usdcAddress: ns.usdcAddress, adminWallet: config.adminWallet,
+      }))
+    } finally { setChecking(false) }
   }
 
   return (
@@ -837,22 +847,22 @@ function ConfigTab() {
         These values are saved to Cloudflare and apply to every visitor. Only the admin wallet can change them.
       </p>
 
-      {/* Network Toggle */}
+      {/* Site network — this is the only place the network is switched */}
       <div className="p-4 rounded-xl space-y-3" style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)' }}>
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-3">
           <div>
-            <p className="text-sm font-semibold" style={{ color: 'var(--ink)' }}>Default network for visitors</p>
+            <p className="text-sm font-semibold" style={{ color: 'var(--ink)' }}>Site network</p>
             <p className="text-xs mt-0.5" style={{ color: 'var(--subtle)' }}>
               {config.network === 'testnet'
-                ? 'Arc Testnet (chain 5042002) — free test USDC, safe for testing'
-                : 'Arc Mainnet (chain 5042) — real USDC, live trading'}
+                ? 'Arc Testnet (chain 5042002) — free test USDC. Visitors see testnet markets.'
+                : 'Arc Mainnet (chain 5042) — real USDC. Visitors see live markets.'}
             </p>
           </div>
           <div className="flex rounded-lg overflow-hidden flex-shrink-0" style={{ border: '1px solid var(--border)' }}>
             {(['mainnet', 'testnet'] as const).map(n => (
               <button
                 key={n}
-                onClick={() => setConfig(c => ({ ...c, network: n }))}
+                onClick={() => { setConfig(c => ({ ...c, network: n })); setEditNet(n) }}
                 className="px-3 py-1.5 text-xs font-semibold capitalize transition-colors"
                 style={{
                   background: config.network === n ? (n === 'mainnet' ? 'var(--accent)' : '#059669') : 'var(--surface-muted)',
@@ -864,46 +874,84 @@ function ConfigTab() {
             ))}
           </div>
         </div>
-        <div className="text-xs px-3 py-2 rounded-lg" style={{
+        <div className="text-xs px-3 py-2 rounded-lg break-all" style={{
           background: config.network === 'testnet' ? 'rgba(5,150,105,0.1)' : 'rgba(91,156,246,0.1)',
           color: config.network === 'testnet' ? '#059669' : 'var(--accent)',
           border: `1px solid ${config.network === 'testnet' ? 'rgba(5,150,105,0.3)' : 'rgba(91,156,246,0.3)'}`,
         }}>
           Active contract: {getActiveContractAddress(config) || '(not set)'}
         </div>
+        <p className="text-[11px]" style={{ color: 'var(--subtle)' }}>Changing the network applies to all visitors after you press Save Config.</p>
       </div>
 
-      <Field label={<span className="flex items-center">Mainnet Contract Address</span>}>
-        <input value={config.contractAddress} onChange={e => setConfig(c => ({ ...c, contractAddress: e.target.value }))} placeholder="0x... (deployed on Arc Mainnet)" className={inputCls + ' mono'} />
-      </Field>
-      <Field label={<span className="flex items-center">Testnet Contract Address</span>}>
-        <input value={config.testnetContractAddress} onChange={e => setConfig(c => ({ ...c, testnetContractAddress: e.target.value }))} placeholder="0x... (deployed on Arc Testnet)" className={inputCls + ' mono'} />
-      </Field>
-      <div className="grid grid-cols-2 gap-3">
-        <Field label={<span className="flex items-center">Mainnet RPC URL</span>}>
-          <input value={config.rpcUrl} onChange={e => setConfig(c => ({ ...c, rpcUrl: e.target.value }))} className={inputCls} />
+      {/* Per-network settings */}
+      <div className="rounded-xl p-4 space-y-4" style={{ border: '1px solid var(--border)' }}>
+        <div className="flex rounded-lg overflow-hidden" style={{ border: '1px solid var(--border)' }}>
+          {(['mainnet', 'testnet'] as const).map(n => (
+            <button
+              key={n}
+              onClick={() => { setEditNet(n); setCheckLines(null) }}
+              className="flex-1 py-2 text-xs font-semibold capitalize"
+              style={{
+                background: editNet === n ? 'var(--surface-strong)' : 'transparent',
+                color: editNet === n ? 'var(--ink)' : 'var(--subtle)',
+              }}
+            >
+              {n === 'mainnet' ? '🔴 Mainnet settings' : '🟢 Testnet settings'}{config.network === n ? ' · live' : ''}
+            </button>
+          ))}
+        </div>
+
+        <Field label={`${editNet === 'mainnet' ? 'Mainnet' : 'Testnet'} Contract Address`}>
+          <input value={ns.contractAddress} onChange={e => setNs({ contractAddress: e.target.value })} placeholder={`0x... (PredarcMarket on Arc ${editNet})`} className={inputCls + ' mono'} />
         </Field>
-        <Field label="Min Liquidity (USDC)">
-          <input type="number" min={1} step={1} value={config.minLiquidityUsdc} onChange={e => setConfig(c => ({ ...c, minLiquidityUsdc: Math.max(1, parseInt(e.target.value) || 1) }))} className={inputCls + ' tabular-nums'} />
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="RPC URL">
+            <input value={ns.rpcUrl} onChange={e => setNs({ rpcUrl: e.target.value })} className={inputCls} />
+          </Field>
+          <Field label="Min Liquidity (USDC)">
+            <input type="number" min={1} step={1} value={ns.minLiquidityUsdc} onChange={e => setNs({ minLiquidityUsdc: Math.max(1, parseInt(e.target.value) || 1) })} className={inputCls + ' tabular-nums'} />
+          </Field>
+        </div>
+        <Field label="USDC Address">
+          <input value={ns.usdcAddress} onChange={e => setNs({ usdcAddress: e.target.value })} className={inputCls + ' mono'} />
         </Field>
+        <Field label="Fee Recipient">
+          <input value={ns.feeRecipient} onChange={e => setNs({ feeRecipient: e.target.value })} placeholder="0x..." className={inputCls + ' mono'} />
+        </Field>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Chainlink BTC/USD Feed">
+            <input value={ns.chainlinkBtcFeed} onChange={e => setNs({ chainlinkBtcFeed: e.target.value })} placeholder="0x..." className={inputCls + ' mono'} />
+          </Field>
+          <Field label="Chainlink ETH/USD Feed">
+            <input value={ns.chainlinkEthFeed} onChange={e => setNs({ chainlinkEthFeed: e.target.value })} placeholder="0x..." className={inputCls + ' mono'} />
+          </Field>
+        </div>
+
+        <button
+          type="button"
+          onClick={() => void runCheck()}
+          disabled={checking}
+          className="w-full py-2.5 rounded-lg text-sm font-semibold flex items-center justify-center gap-2 disabled:opacity-60"
+          style={{ background: 'transparent', color: 'var(--ink)', border: '1px solid var(--border)' }}
+        >
+          <RefreshCw size={13} className={checking ? 'animate-spin' : ''} />
+          {checking ? 'Checking…' : `Check ${editNet} contract`}
+        </button>
+        {checkLines && (
+          <div className="rounded-xl p-3 space-y-1.5" style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)' }}>
+            {checkLines.map((l, i) => (
+              <p key={i} className="text-xs break-words" style={{ color: l.ok ? 'var(--success)' : 'var(--danger)' }}>
+                {l.ok ? '✓' : '✗'} <strong>{l.label}</strong> — {l.detail}
+              </p>
+            ))}
+          </div>
+        )}
       </div>
-      <Field label={<span className="flex items-center">USDC Address</span>}>
-        <input value={config.usdcAddress} onChange={e => setConfig(c => ({ ...c, usdcAddress: e.target.value }))} className={inputCls + ' mono'} />
+
+      <Field label="Admin Wallet (set by the ADMIN_WALLET variable in Cloudflare)">
+        <input value={config.adminWallet} readOnly className={inputCls + ' mono opacity-70'} />
       </Field>
-      <Field label={<span className="flex items-center">Admin Wallet</span>}>
-        <input value={config.adminWallet} readOnly title="Set via the ADMIN_WALLET variable in Cloudflare" className={inputCls + ' mono opacity-70'} />
-      </Field>
-      <Field label={<span className="flex items-center">Fee Recipient</span>}>
-        <input value={config.feeRecipient} onChange={e => setConfig(c => ({ ...c, feeRecipient: e.target.value }))} placeholder="0x..." className={inputCls + ' mono'} />
-      </Field>
-      <div className="grid grid-cols-2 gap-3">
-        <Field label={<span className="flex items-center">Chainlink BTC/USD Feed</span>}>
-          <input value={config.chainlinkBtcFeed} onChange={e => setConfig(c => ({ ...c, chainlinkBtcFeed: e.target.value }))} placeholder="0x..." className={inputCls + ' mono'} />
-        </Field>
-        <Field label={<span className="flex items-center">Chainlink ETH/USD Feed</span>}>
-          <input value={config.chainlinkEthFeed} onChange={e => setConfig(c => ({ ...c, chainlinkEthFeed: e.target.value }))} placeholder="0x..." className={inputCls + ' mono'} />
-        </Field>
-      </div>
 
       {/* AI Settings */}
       <div className="pt-2 border-t" style={{ borderColor: 'var(--border)' }}>
@@ -1020,7 +1068,7 @@ function ConfigTab() {
       <button
         onClick={async () => {
           if (!window.confirm('Delete all saved settings from Cloudflare and reset to defaults?')) return
-          try { await resetConfig(); setConfig(loadRawConfig()); toast.success('Reset to defaults.') }
+          try { await resetConfig(); setConfig(loadConfig()); toast.success('Reset to defaults.') }
           catch (e) { toast.error(e instanceof Error ? e.message : 'Reset failed') }
         }}
         className="w-full py-2 rounded-lg text-xs flex items-center justify-center gap-1.5"

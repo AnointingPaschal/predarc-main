@@ -1,7 +1,9 @@
-import { useWriteContract, useWaitForTransactionReceipt } from 'wagmi'
+import { useState } from 'react'
+import { useConfig, useWriteContract, useWaitForTransactionReceipt } from 'wagmi'
+import { waitForTransactionReceipt } from 'wagmi/actions'
 import { erc20Abi } from 'viem'
-import { PREDARC_ABI, USDC_ADDRESS } from '../lib/contract'
-import { activeContract, activeChainId } from '../lib/adminConfig'
+import { PREDARC_ABI } from '../lib/contract'
+import { activeContract, activeChainId, activeUsdc } from '../lib/adminConfig'
 
 function activeAddress() { return activeContract() }
 
@@ -10,7 +12,7 @@ export function useApproveUsdc() {
   const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({ hash })
   const approve = (amount: bigint) => {
     writeContract({
-      address: USDC_ADDRESS,
+      address: activeUsdc(),
       chainId: activeChainId(),
       abi: erc20Abi,
       functionName: 'approve',
@@ -149,4 +151,54 @@ export function useWithdrawFees() {
     writeContract({ address: activeAddress(), chainId: activeChainId(), abi: PREDARC_ABI, functionName: 'withdrawFees', args: [] })
   }
   return { withdraw, hash, isPending, isConfirming, isSuccess, isError, error, reset }
+}
+
+export interface CreateMarketParams {
+  marketType: number
+  question: string
+  outcomes: string[]
+  endTime: bigint
+  resolutionTime: bigint
+  scalarLow: bigint
+  scalarHigh: bigint
+  category: string
+  imageUrl: string
+  initialLiquidity: bigint
+}
+
+/**
+ * Approve USDC, wait for the approval to be mined, then create the market and
+ * wait for that too. Throws on failure so callers can show a real error.
+ */
+export function useCreateMarketFlow() {
+  const wagmiConfig = useConfig()
+  const { writeContractAsync } = useWriteContract()
+  const [step, setStep] = useState<'idle' | 'approving' | 'creating'>('idle')
+
+  const run = async (p: CreateMarketParams): Promise<`0x${string}`> => {
+    const chainId = activeChainId()
+    const contract = activeContract()
+    if (!contract) throw new Error('No contract address is set for this network. Add it in Admin → Config.')
+    const wait = async (hash: `0x${string}`, what: string) => {
+      const r = await waitForTransactionReceipt(wagmiConfig, { hash, chainId })
+      if (r.status !== 'success') throw new Error(`${what} transaction reverted onchain.`)
+    }
+    try {
+      setStep('approving')
+      await wait(await writeContractAsync({
+        address: activeUsdc(), chainId, abi: erc20Abi, functionName: 'approve', args: [contract, p.initialLiquidity],
+      }), 'USDC approval')
+
+      setStep('creating')
+      const hash = await writeContractAsync({
+        address: contract, chainId, abi: PREDARC_ABI, functionName: 'createMarket',
+        args: [p.marketType, p.question, p.outcomes, p.endTime, p.resolutionTime, p.scalarLow, p.scalarHigh, p.category, p.imageUrl, p.initialLiquidity],
+      })
+      await wait(hash, 'Create market')
+      return hash
+    } finally {
+      setStep('idle')
+    }
+  }
+  return { run, step, busy: step !== 'idle' }
 }

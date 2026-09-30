@@ -20,7 +20,7 @@ export const onRequestGet = async ({ request, env }: { request: Request; env: En
     if (!isLeagueSlug(league)) return json({ error: 'league required' }, 400)
     const days = Number(url.searchParams.get('days')) || 7
     const fixtures = await upcomingFixtures(league, days, LEAGUES.find(l => l.id === league)?.name)
-    return json({ fixtures })
+    return json({ fixtures: fixtures ?? [], reachable: fixtures !== null })
   }
   const bad = checkStorage(env); if (bad) return bad
   const network = url.searchParams.get('network')

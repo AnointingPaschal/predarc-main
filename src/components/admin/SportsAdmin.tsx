@@ -31,7 +31,7 @@ export default function SportsAdmin() {
   const [leagues, setLeagues] = useState<string[]>(['eng.1', 'esp.1', 'ita.1', 'ger.1', 'fra.1', 'uefa.champions'])
   const [custom, setCustom] = useState('')
   const [filter, setFilter] = useState('')
-  const [days, setDays] = useState(7)
+  const [days, setDays] = useState(21)
   const [kinds, setKinds] = useState<string[]>(DEFAULT_KINDS)
   const [liq, setLiq] = useState(String(cfg.sportsLiquidityUsdc ?? 10))
   const [fixtures, setFixtures] = useState<Fixture[]>([])
@@ -58,10 +58,20 @@ export default function SportsAdmin() {
     if (!ids.length) return toast.error('Pick at least one league')
     setLoading(true)
     try {
-      const all = (await Promise.all(ids.map(id => fetchFixtures(id, days).catch(() => [] as Fixture[])))).flat()
+      const results: { id: string; fixtures: Fixture[]; reachable: boolean }[] = []
+      for (let i = 0; i < ids.length; i += 6) {
+        results.push(...await Promise.all(ids.slice(i, i + 6).map(async id => {
+          try { const r = await fetchFixtures(id, days); return { id, ...r } } catch { return { id, fixtures: [] as Fixture[], reachable: false } }
+        })))
+      }
+      const all = results.flatMap(r => r.fixtures)
+      const unreachable = results.filter(r => !r.reachable).length
       const fresh = all.filter(f => !known.has(f.eventId)).sort((a, b) => a.kickoff - b.kickoff)
       setFixtures(fresh); setPicked(new Set(fresh.map(f => f.eventId)))
-      toast.success(`${fresh.length} new fixture${fresh.length === 1 ? '' : 's'} found${all.length > fresh.length ? ` (${all.length - fresh.length} already generated)` : ''}`)
+      const extra = `${all.length > fresh.length ? ` (${all.length - fresh.length} already generated)` : ''}${unreachable ? `; ${unreachable} league${unreachable === 1 ? '' : 's'} not available from ESPN` : ''}`
+      if (fresh.length) toast.success(`${fresh.length} new fixture${fresh.length === 1 ? '' : 's'} found${extra}`)
+      else if (unreachable === results.length) toast.error('Could not reach the fixtures feed. Try again in a moment.')
+      else toast.warning(`No fixtures in the next ${days} days${extra}. Leagues pause for international breaks: try more days (up to 30).`)
     } catch (e) { toast.error(e instanceof Error ? e.message : 'Could not load fixtures') } finally { setLoading(false) }
   }
 
@@ -241,7 +251,7 @@ export default function SportsAdmin() {
 
         <div className="flex flex-wrap items-end gap-3">
           <label className="text-xs" style={{ color: 'var(--subtle)' }}>Days ahead
-            <select value={days} onChange={e => setDays(Number(e.target.value))} className={`${inputCls} block mt-1`}>{[1, 2, 3, 5, 7, 10, 14].map(d => <option key={d} value={d}>{d}</option>)}</select></label>
+            <select value={days} onChange={e => setDays(Number(e.target.value))} className={`${inputCls} block mt-1`}>{[1, 2, 3, 5, 7, 10, 14, 21, 30].map(d => <option key={d} value={d}>{d}</option>)}</select></label>
           <label className="text-xs" style={{ color: 'var(--subtle)' }}>Liquidity per market (USDC)
             <input value={liq} onChange={e => setLiq(e.target.value)} className={`${inputCls} block mt-1 w-32`} inputMode="decimal" /></label>
           <button onClick={load} disabled={loading} className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium" style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)' }}>

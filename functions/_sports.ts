@@ -28,32 +28,35 @@ const team = (c?: EspnComp) => ({ name: c?.team?.displayName || c?.team?.shortDi
 
 async function scoreboard(league: string, from: number, to: number): Promise<Scoreboard | null> {
   const q = from === to ? ymd(from) : `${ymd(from)}-${ymd(to)}`
-  const ranged = await getJson<Scoreboard>(`${BASE}/${league}/scoreboard?dates=${q}&limit=300`)
-  if (ranged) return ranged
-  if (from === to) return null
-  // Some leagues reject ranges: fall back to day by day (max a week)
-  const events: EspnEvent[] = []; let name: string | undefined
-  for (let t = from, n = 0; t <= to && n < 8; t += 86_400_000, n++) {
-    const day = await getJson<Scoreboard>(`${BASE}/${league}/scoreboard?dates=${ymd(t)}&limit=300`)
-    if (day) { events.push(...(day.events ?? [])); name = name ?? day.leagues?.[0]?.name }
+  const ranged = await getJson<Scoreboard>(`${BASE}/${league}/scoreboard?dates=${q}&limit=300`) ?? (from === to ? null : await getJson<Scoreboard>(`${BASE}/${league}/scoreboard?dates=${q}`))
+  if (ranged || from === to) return ranged
+  // Ranges are rejected by some leagues/proxies: ask day by day (a few at a time), up to a month
+  const days: number[] = []
+  for (let t = from; t <= to && days.length < 31; t += 86_400_000) days.push(t)
+  const events: EspnEvent[] = []; let name: string | undefined; let any = false
+  for (let i = 0; i < days.length; i += 6) {
+    const got = await Promise.all(days.slice(i, i + 6).map(t => getJson<Scoreboard>(`${BASE}/${league}/scoreboard?dates=${ymd(t)}&limit=300`)))
+    for (const day of got) if (day) { any = true; events.push(...(day.events ?? [])); name = name ?? day.leagues?.[0]?.name }
   }
-  return events.length || name ? { events, leagues: [{ name }] } : null
+  return any ? { events, leagues: [{ name }] } : null
 }
 
-/** Upcoming (not started) fixtures for a league within the next `days` days. */
-export async function upcomingFixtures(league: string, days: number, leagueName?: string): Promise<Fixture[]> {
+/** Upcoming (not started) fixtures for a league within the next `days` days. `null` means the feed could not be reached. */
+export async function upcomingFixtures(league: string, days: number, leagueName?: string): Promise<Fixture[] | null> {
   const now = Date.now()
-  const sb = await scoreboard(league, now, now + Math.max(1, Math.min(14, days)) * 86_400_000)
-  if (!sb) return []
+  const sb = await scoreboard(league, now, now + Math.max(1, Math.min(30, days)) * 86_400_000)
+  if (!sb) return null
   const name = leagueName || sb.leagues?.[0]?.name || league
+  const seen = new Set<string>()
   const out: Fixture[] = []
   for (const e of sb.events ?? []) {
     const comp = e.competitions?.[0]
     const state = e.status?.type?.state ?? comp?.status?.type?.state
     const kickoff = Date.parse(e.date ?? '')
-    if (!e.id || !comp?.competitors || state !== 'pre' || !Number.isFinite(kickoff) || kickoff < now + 15 * 60_000) continue
+    if (!e.id || seen.has(String(e.id)) || !comp?.competitors || state !== 'pre' || !Number.isFinite(kickoff) || kickoff < now + 15 * 60_000) continue
     const home = comp.competitors.find(c => c.homeAway === 'home'), away = comp.competitors.find(c => c.homeAway === 'away')
     if (!home || !away) continue
+    seen.add(String(e.id))
     out.push({ eventId: String(e.id), league, leagueName: name, kickoff, home: team(home), away: team(away) })
   }
   return out.sort((a, b) => a.kickoff - b.kickoff)

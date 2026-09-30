@@ -12,8 +12,8 @@ async function parse<T>(res: Response): Promise<T> {
   return body
 }
 
-export const fetchFixtures = async (league: string, days: number): Promise<Fixture[]> =>
-  (await parse<{ fixtures: Fixture[] }>(await fetch(`/api/sports?action=fixtures&league=${encodeURIComponent(league)}&days=${days}`))).fixtures
+export const fetchFixtures = async (league: string, days: number): Promise<{ fixtures: Fixture[]; reachable: boolean }> =>
+  parse<{ fixtures: Fixture[]; reachable: boolean }>(await fetch(`/api/sports?action=fixtures&league=${encodeURIComponent(league)}&days=${days}`))
 
 export const fetchRegistry = async (network: Network = getEffectiveNetwork()): Promise<SportsRecord[]> =>
   (await parse<{ records: SportsRecord[] }>(await fetch(`/api/sports?action=registry&network=${network}`, { cache: 'no-store' }))).records

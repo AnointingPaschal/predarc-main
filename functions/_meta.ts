@@ -5,6 +5,7 @@ export function cleanMeta(input: Record<string, unknown>) {
   const out: Record<string, unknown> = {}
   const d = str(input.description, 3000); if (d !== undefined) out.description = d
   const r = str(input.resolutionCriteria, 3000); if (r !== undefined) out.resolutionCriteria = r
+  const iu = str(input.imageUrl, 300); if (iu && (iu.startsWith('/api/image?id=') || /^https:\/\//.test(iu))) out.imageUrl = iu
   if (Array.isArray(input.sources)) {
     out.sources = input.sources.slice(0, 12).map(s => {
       const o = (s && typeof s === 'object' ? s : {}) as Record<string, unknown>

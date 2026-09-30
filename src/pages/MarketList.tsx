@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react'
 import { Search, TrendingUp, Zap, BarChart2, Activity } from 'lucide-react'
 import MarketCard from '../components/MarketCard'
+import { useMarketImages } from '../hooks/useMarketImages'
 import { BtcCard, BtcResultsCard } from '../components/BtcPromo'
 import { useAllMarkets } from '../hooks/useMarkets'
 import { Market, MarketStatus, MarketType, CATEGORIES, formatUsdc } from '../lib/contract'
@@ -21,6 +22,7 @@ export default function MarketList() {
   const [typeFilter, setTypeFilter] = useState('All')
 
   const allMarkets = (markets as unknown as Market[] | undefined) ?? []
+  const images = useMarketImages(allMarkets)
 
   const stats = useMemo(() => {
     const open = allMarkets.filter(m => m.status === MarketStatus.Open)
@@ -94,7 +96,7 @@ export default function MarketList() {
             </h2>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {featured.slice(0, 3).map(m => <MarketCard key={m.id.toString()} market={m} featured />)}
+            {featured.slice(0, 3).map(m => <MarketCard key={m.id.toString()} market={m} featured image={images[m.id.toString()]} />)}
           </div>
         </div>
       )}
@@ -186,7 +188,7 @@ export default function MarketList() {
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
             <BtcCard />
-            {filtered.map(m => <MarketCard key={m.id.toString()} market={m} />)}
+            {filtered.map(m => <MarketCard key={m.id.toString()} market={m} image={images[m.id.toString()]} />)}
           </div>
         </>
       )}

@@ -6,7 +6,7 @@ import { usd, utcHM } from '../lib/btcRounds'
 export default function BtcChart({ points, price, target, windowStart, windowEnd, compact }: {
   points: PricePoint[]; price: number | null; target: number; windowStart: number; windowEnd: number; compact?: boolean
 }) {
-  const W = 720, H = compact ? 120 : 260, PADL = 8, PADR = 64, PADT = 14, PADB = 22
+  const W = compact ? 360 : 720, H = compact ? 76 : 260, PADL = 8, PADR = compact ? 8 : 64, PADT = compact ? 8 : 14, PADB = compact ? 8 : 22
   const view = useMemo(() => {
     const from = compact || !windowStart ? Date.now() - 15 * 60_000 : windowStart - 300_000
     const pts = points.filter(p => p.t >= from)
@@ -34,7 +34,7 @@ export default function BtcChart({ points, price, target, windowStart, windowEnd
       {ticks.map((v, i) => (
         <g key={i}>
           <line x1={PADL} x2={W - PADR} y1={y(v)} y2={y(v)} stroke="var(--border)" strokeDasharray="2 4" />
-          <text x={W - PADR + 6} y={y(v) + 3} fontSize="10" fill="var(--subtle)">{v.toLocaleString('en-US', { maximumFractionDigits: 0 })}</text>
+          {!compact && <text x={W - PADR + 6} y={y(v) + 3} fontSize="10" fill="var(--subtle)">{v.toLocaleString('en-US', { maximumFractionDigits: 0 })}</text>}
         </g>
       ))}
       {!compact && windowStart >= tMin && <rect x={x(windowStart)} y={PADT} width={Math.max(0, x(Math.max(windowEnd, tMax)) - x(windowStart))} height={H - PADT - PADB} fill="#F7931A" opacity="0.05" />}
@@ -43,8 +43,8 @@ export default function BtcChart({ points, price, target, windowStart, windowEnd
       {target > 0 && (
         <g>
           <line x1={PADL} x2={W - PADR} y1={y(target)} y2={y(target)} stroke="#F7931A" strokeWidth="1.5" strokeDasharray="6 4" />
-          <rect x={W - PADR + 2} y={y(target) - 8} width={60} height={16} rx={4} fill="#F7931A" />
-          <text x={W - PADR + 32} y={y(target) + 4} fontSize="9.5" fontWeight="700" textAnchor="middle" fill="#fff">TO BEAT</text>
+          {!compact && <rect x={W - PADR + 2} y={y(target) - 8} width={60} height={16} rx={4} fill="#F7931A" />}
+          {!compact && <text x={W - PADR + 32} y={y(target) + 4} fontSize="9.5" fontWeight="700" textAnchor="middle" fill="#fff">TO BEAT</text>}
         </g>
       )}
       <path d={`${path} L${x(last.t)},${H - PADB} L${x(view[0].t)},${H - PADB} Z`} fill={color} opacity="0.08" />

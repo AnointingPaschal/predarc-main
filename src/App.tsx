@@ -6,6 +6,7 @@ import MarketDetail from './pages/MarketDetail'
 import Portfolio from './pages/Portfolio'
 import AdminPanel from './pages/AdminPanel'
 import BtcRounds from './pages/BtcRounds'
+import Footer from './components/Footer'
 import { useAccount } from 'wagmi'
 import { useSiteConfig, loadConfig, applyThemeVars, isAdminAddress, useNetwork, getActiveContractAddress } from './lib/adminConfig'
 import { applyTheme } from './lib/theme'
@@ -52,68 +53,6 @@ export default function App() {
         <Footer />
       </div>
     </BrowserRouter>
-  )
-}
-
-function Footer() {
-  const config = useSiteConfig()
-  const { address } = useAccount()
-  const isAdmin = isAdminAddress(address, config.adminWallet)
-  return (
-    <footer
-      className="border-t py-8 theme-transition"
-      style={{ borderColor: 'var(--border)', background: 'var(--surface)' }}
-    >
-      <div className="max-w-7xl mx-auto px-4 sm:px-6">
-        <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
-          <div className="flex flex-col items-center sm:items-start gap-1">
-            <span className="display font-700 text-sm" style={{ color: 'var(--ink)' }}>
-              {config.siteName || 'Predarc'}
-            </span>
-            <span className="text-xs" style={{ color: 'var(--subtle)' }}>
-              {config.footerText || 'Powered by Arc. Built with Circle USDC.'}
-            </span>
-          </div>
-          <div className="flex items-center gap-5">
-            {config.twitterUrl && (
-              <a href={config.twitterUrl} target="_blank" rel="noopener noreferrer" className="text-xs theme-transition hover:opacity-80" style={{ color: 'var(--subtle)' }}>
-                Twitter
-              </a>
-            )}
-            {config.discordUrl && (
-              <a href={config.discordUrl} target="_blank" rel="noopener noreferrer" className="text-xs theme-transition hover:opacity-80" style={{ color: 'var(--subtle)' }}>
-                Discord
-              </a>
-            )}
-            {config.githubUrl && (
-              <a href={config.githubUrl} target="_blank" rel="noopener noreferrer" className="text-xs theme-transition hover:opacity-80" style={{ color: 'var(--subtle)' }}>
-                GitHub
-              </a>
-            )}
-            {isAdmin && (
-              <a
-                href="/admin"
-                className="text-xs theme-transition hover:opacity-80"
-                style={{ color: 'var(--subtle)' }}
-              >
-                Admin
-              </a>
-            )}
-          </div>
-        </div>
-        <div
-          className="mt-6 pt-4 flex items-center justify-center gap-2"
-          style={{ borderTop: '1px solid var(--border)' }}
-        >
-          <span className="text-xs" style={{ color: 'var(--subtle)' }}>
-            Built onchain with{' '}
-            <span style={{ color: 'var(--accent)' }}>USDC</span>
-            {' '}on{' '}
-            <span style={{ color: 'var(--accent)' }}>Arc</span>
-          </span>
-        </div>
-      </div>
-    </footer>
   )
 }
 

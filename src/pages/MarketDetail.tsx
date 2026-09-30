@@ -9,7 +9,7 @@ import { useAddLiquidity, useRedeemWinnings } from '../hooks/useEscrow'
 import { parseOnchainError } from '../lib/errors'
 import { parseUnits } from 'viem'
 import { activeContract, isAdminAddress, useNetwork, useSiteConfig } from '../lib/adminConfig'
-import { fetchMarketMeta, fetchNews, type MarketMeta, type NewsItem } from '../lib/api'
+import { fetchMarketMeta, requestMarketImage, fetchNews, type MarketMeta, type NewsItem } from '../lib/api'
 import { pricesFromPools } from '../lib/marketMath'
 import { Market, MarketStatus, MarketType, formatUsdc, statusColor, statusLabel, timeUntil } from '../lib/contract'
 import TradingPanel from '../components/TradingPanel'
@@ -58,6 +58,11 @@ export default function MarketDetail() {
     setMetaLoaded(false)
     fetchMarketMeta(marketId).then(setMeta).catch(() => setMeta({})).finally(() => setMetaLoaded(true))
   }, [marketId])
+  const noImage = !!market && (!market.imageUrl || market.imageUrl.startsWith('data:')) && !meta.imageUrl
+  useEffect(() => {
+    if (!metaLoaded || !noImage || marketId === undefined) return
+    void requestMarketImage(marketId).then(r => { if (r.imageUrl) setMeta(m => ({ ...m, imageUrl: r.imageUrl })) }).catch(() => { /* retried on a later visit */ })
+  }, [metaLoaded, noImage, marketId])
   const question = market?.question
   useEffect(() => {
     if (!question) return
@@ -117,8 +122,8 @@ export default function MarketDetail() {
           {/* Header */}
           <div className="rounded-xl p-5" style={card}>
             <div className="flex gap-4">
-              {market.imageUrl && !market.imageUrl.startsWith('data:') && (
-                <img src={market.imageUrl} alt="" className="w-16 h-16 rounded-xl object-cover flex-shrink-0" onError={e => { e.currentTarget.style.display = 'none' }} />
+              {((market.imageUrl && !market.imageUrl.startsWith('data:')) || meta.imageUrl) && (
+                <img src={(market.imageUrl && !market.imageUrl.startsWith('data:')) ? market.imageUrl : meta.imageUrl} alt="" className="w-16 h-16 rounded-xl object-cover flex-shrink-0" onError={e => { e.currentTarget.style.display = 'none' }} />
               )}
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-2 mb-2">

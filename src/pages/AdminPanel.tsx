@@ -1009,6 +1009,10 @@ function ConfigTab() {
             <input type="checkbox" className="mt-0.5" checked={config.openrouterWebSearch} onChange={e => setConfig(c => ({ ...c, openrouterWebSearch: e.target.checked }))} />
             <span><strong style={{ color: 'var(--ink)' }}>Web search (online)</strong> — lets the model look things up live when generating markets and insights. Works with free models too, but OpenRouter bills the search itself, so the account needs a little credit.</span>
           </label>
+          <Field label="Image model for market covers (blank = draw SVG covers with the model above)">
+            <input value={config.openrouterImageModel} onChange={e => setConfig(c => ({ ...c, openrouterImageModel: e.target.value.trim() }))} placeholder="google/gemini-2.5-flash-image" className={inputCls + ' mono'} />
+            <p className="text-[11px] mt-1" style={{ color: 'var(--subtle)' }}>Markets without an image get one automatically. Image models cost a little credit per picture; if it fails or is blank, the normal (free) model draws a simple illustration instead.</p>
+          </Field>
           <Field label="Initial liquidity for AI-published markets (USDC, 0 = free)">
             <input type="number" min={0} step={1} value={config.aiInitialLiquidityUsdc} onChange={e => setConfig(c => ({ ...c, aiInitialLiquidityUsdc: Math.max(0, parseFloat(e.target.value) || 0) }))} className={inputCls + ' tabular-nums'} />
             <p className="text-[11px] mt-1" style={{ color: 'var(--subtle)' }}>A market with 0 liquidity is created for free but can't be traded until you fund it (Fund market box on its page).</p>

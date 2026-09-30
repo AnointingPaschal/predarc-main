@@ -35,40 +35,32 @@ function CardInner({ title }: { title: string }) {
   const upPct = up + down > 0 ? (up / (up + down)) * 100 : 50
   const gap = price && lock ? price - lock : null
   return (
-    <Link to="/btc" className="rounded-2xl p-4 flex flex-col gap-3 theme-transition hover:-translate-y-0.5 transition" style={{ background: 'var(--surface)', border: '1px solid var(--border)', boxShadow: 'var(--card-shadow)' }}>
+    <Link to="/btc" className="rounded-2xl p-3.5 flex flex-col gap-2.5 self-start theme-transition hover:-translate-y-0.5 transition" style={{ background: 'var(--surface)', border: '1px solid var(--border)', boxShadow: 'var(--card-shadow)' }}>
       <div className="flex items-center gap-3">
-        <BtcRing progress={1 - secLeft / dur} size={56}><BtcLogo size={34} /></BtcRing>
+        <BtcRing progress={1 - secLeft / dur} size={46} stroke={3.5}><BtcLogo size={28} /></BtcRing>
         <div className="min-w-0 flex-1">
-          <div className="font-semibold text-sm truncate" style={{ color: 'var(--ink)' }}>{title} · {Math.round(dur / 60)}m</div>
-          <div className="num text-xl font-700 leading-tight" style={{ color: 'var(--ink)' }}>{price ? usd(price) : '—'}</div>
+          <div className="flex items-center gap-1.5 text-[11px]" style={{ color: 'var(--subtle)' }}>
+            <span className="inline-flex items-center gap-1 font-semibold" style={{ color: live ? 'var(--danger)' : 'var(--subtle)' }}><span className="inline-block w-1.5 h-1.5 rounded-full" style={{ background: 'currentColor' }} />LIVE</span>
+            <span className="truncate">{title} · {Math.round(dur / 60)}m</span>
+          </div>
+          <div className="num text-lg font-700 leading-tight" style={{ color: 'var(--ink)' }}>{price ? usd(price) : '—'}</div>
         </div>
         <div className="text-right">
           <div className="num text-sm font-semibold" style={{ color: 'var(--ink)' }}>{Math.floor(secLeft / 60)}:{String(Math.floor(secLeft % 60)).padStart(2, '0')}</div>
-          <div className="text-[10px] uppercase tracking-wider" style={{ color: 'var(--subtle)' }}>left</div>
+          <div className="num text-[11px]" style={{ color: gap == null ? 'var(--subtle)' : gap >= 0 ? 'var(--success)' : 'var(--danger)' }}>
+            {gap == null ? (chance == null ? '' : `${Math.round(chance * 100)}% Up`) : `${gap >= 0 ? '▲' : '▼'} ${usd(Math.abs(gap)).replace('.00', '')}`}
+          </div>
         </div>
       </div>
-      <div className="rounded-xl overflow-hidden -mx-1" style={{ background: 'var(--surface-muted)' }}>
+      <div className="rounded-lg overflow-hidden -mx-0.5" style={{ background: 'var(--surface-muted)' }}>
         <BtcChart compact points={points} price={price} target={lock} windowStart={0} windowEnd={0} />
       </div>
-      <div className="flex items-center gap-2 text-xs">
-        <span className="px-2 py-1 rounded-md num font-semibold" style={{ background: gap == null ? 'var(--surface-muted)' : gap >= 0 ? 'rgba(52,211,153,.15)' : 'rgba(248,113,113,.15)', color: gap == null ? 'var(--subtle)' : gap >= 0 ? 'var(--success)' : 'var(--danger)' }}>
-          {gap == null ? 'awaiting target' : `${gap >= 0 ? '▲' : '▼'} ${usd(Math.abs(gap))} vs target`}
-        </span>
-        <span className="ml-auto num" style={{ color: 'var(--muted)' }}>{chance == null ? '' : `${Math.round(chance * 100)}% Up`}</span>
+      <div className="grid grid-cols-2 gap-2">
+        <div className="rounded-lg py-1.5 text-center text-sm font-semibold" style={{ background: 'rgba(52,211,153,.16)', color: 'var(--success)' }}>▲ Up{pu ? <span className="opacity-70 text-xs"> {pu.toFixed(2)}x</span> : null}</div>
+        <div className="rounded-lg py-1.5 text-center text-sm font-semibold" style={{ background: 'rgba(248,113,113,.16)', color: 'var(--danger)' }}>▼ Down{pd ? <span className="opacity-70 text-xs"> {pd.toFixed(2)}x</span> : null}</div>
       </div>
-      <div>
-        <div className="h-1.5 rounded-full overflow-hidden flex mb-2" style={{ background: 'var(--surface-strong)' }}>
-          <div style={{ width: `${upPct}%`, background: 'var(--success)' }} /><div style={{ width: `${100 - upPct}%`, background: 'var(--danger)' }} />
-        </div>
-        <div className="grid grid-cols-2 gap-2">
-          <div className="rounded-lg py-2 text-center text-sm font-semibold" style={{ background: 'rgba(52,211,153,.16)', color: 'var(--success)' }}>▲ Up{pu ? <span className="opacity-70 text-xs"> {pu.toFixed(2)}x</span> : null}</div>
-          <div className="rounded-lg py-2 text-center text-sm font-semibold" style={{ background: 'rgba(248,113,113,.16)', color: 'var(--danger)' }}>▼ Down{pd ? <span className="opacity-70 text-xs"> {pd.toFixed(2)}x</span> : null}</div>
-        </div>
-      </div>
-      <div className="flex items-center gap-2 text-[11px]" style={{ color: 'var(--subtle)' }}>
-        <span className="inline-flex items-center gap-1 font-semibold" style={{ color: live ? 'var(--danger)' : 'var(--subtle)' }}><span className="inline-block w-1.5 h-1.5 rounded-full" style={{ background: 'currentColor' }} /> LIVE</span>
-        <span>Bitcoin</span>
-        <span className="ml-auto num">next {utcHM((curId + 1) * dur)} UTC{up + down > 0 ? ` · $${(up + down).toFixed(0)}` : ''}</span>
+      <div className="h-1 rounded-full overflow-hidden flex" style={{ background: 'var(--surface-strong)' }}>
+        <div style={{ width: `${upPct}%`, background: 'var(--success)' }} /><div style={{ width: `${100 - upPct}%`, background: 'var(--danger)' }} />
       </div>
     </Link>
   )

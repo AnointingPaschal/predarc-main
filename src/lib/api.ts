@@ -56,6 +56,7 @@ export interface AIAnalysis {
   confidence: 'low' | 'medium' | 'high'; model: string; generatedAt: number
 }
 export interface MarketMeta {
+  imageUrl?: string
   description?: string
   resolutionCriteria?: string
   sources?: { title: string; url: string }[]
@@ -106,4 +107,19 @@ export async function uploadMarketImage(file: File): Promise<string> {
   const body = (await r.json().catch(() => ({}))) as { path?: string; error?: string }
   if (!r.ok || !body.path) throw new Error(body.error || `Upload failed (${r.status})`)
   return `${window.location.origin}${body.path}`
+}
+
+// ── Cover images ─────────────────────────────────────────────────────────────
+export async function fetchMarketImages(ids: (bigint | string)[], network: Network = getEffectiveNetwork()): Promise<Record<string, string>> {
+  if (!ids.length) return {}
+  const r = await fetch(`/api/market-image?network=${network}&markets=${ids.map(String).join(',')}`)
+  return ((await r.json()) as { images?: Record<string, string> }).images ?? {}
+}
+export async function requestMarketImage(market: bigint | string, opts: { force?: boolean; network?: Network } = {}): Promise<{ status: string; imageUrl?: string; reason?: string }> {
+  const r = await fetch('/api/market-image', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...(opts.force ? adminAuthHeaders() : {}) },
+    body: JSON.stringify({ network: opts.network ?? getEffectiveNetwork(), market: String(market), force: opts.force === true }),
+  })
+  return r.json()
 }

@@ -6,6 +6,7 @@ import HeroPredictions from '../components/HeroPredictions'
 import MatchCard, { isDone } from '../components/sports/MatchCard'
 import { BtcCard } from '../components/BtcPromo'
 import { useAllMarkets } from '../hooks/useMarkets'
+import { useSportsMarkets } from '../lib/sportsChain'
 import { useSportsRegistry, pingSportsKeeper } from '../lib/sports'
 import { useSiteConfig, isAdminAddress } from '../lib/adminConfig'
 import { useAccount } from 'wagmi'
@@ -26,19 +27,19 @@ export default function MarketList() {
   const cfg = useSiteConfig()
   const { data: markets, isLoading } = useAllMarkets()
   const { records } = useSportsRegistry(90_000)
+  const sportsOn = cfg.sportsEnabled !== false
   const [search, setSearch] = useState('')
   const [category, setCategory] = useState('All')
   const [status, setStatus] = useState('All')
   const [typeFilter, setTypeFilter] = useState('All')
 
   const allMarkets = (markets as unknown as Market[] | undefined) ?? []
-  const byId = useMemo(() => new Map(allMarkets.map(m => [m.id.toString(), m])), [allMarkets])
+  const { markets: byId } = useSportsMarkets(sportsOn ? records : undefined)
   const { index: imageIndex, add: addImage } = useImageIndex()
   const images = useMemo(() => Object.fromEntries(allMarkets.map(m => [m.id.toString(), (m.imageUrl && !m.imageUrl.startsWith('data:') ? m.imageUrl : '') || imageIndex[m.id.toString()] || ''])), [allMarkets, imageIndex])
   const { address } = useAccount()
   const isAdmin = isAdminAddress(address, cfg.adminWallet)
   const covers = useAutoCovers({ enabled: isAdmin && cfg.aiAutoCovers !== false && !isLoading, markets: allMarkets, hasImage: m => !!images[m.id.toString()], onDone: addImage })
-  const sportsOn = cfg.sportsEnabled !== false
   useEffect(() => { if (sportsOn && cfg.sportsAutoSettle !== false && records?.length) pingSportsKeeper() }, [sportsOn, cfg.sportsAutoSettle, records?.length])
 
   const matches = useMemo(() => (sportsOn ? records ?? [] : []), [sportsOn, records])

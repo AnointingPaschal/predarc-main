@@ -32,7 +32,7 @@ const post = async (body: Record<string, unknown>) =>
 export const registerFixtures = (records: unknown[]) => post({ action: 'register', records })
 export const recordSettled = (marks: unknown[]) => post({ action: 'settled', marks })
 
-export interface KeeperStatus { configured: boolean; address?: string; balance?: string; isOwner?: boolean | null }
+export interface KeeperStatus { configured: boolean; address?: string; balance?: string; isOwner?: boolean | null; authorised?: boolean | null }
 export const fetchSportsKeeper = async (network: Network = getEffectiveNetwork()): Promise<KeeperStatus> =>
   parse<KeeperStatus>(await fetch(`/api/sports-keeper?network=${network}`))
 

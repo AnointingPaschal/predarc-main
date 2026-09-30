@@ -1,21 +1,19 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { ArrowLeft, Trophy, Share2 } from 'lucide-react'
 import { toast } from 'sonner'
-import { useAllMarkets } from '../hooks/useMarkets'
+import { useSportsMarkets } from '../lib/sportsChain'
+import BetPanel from '../components/sports/BetPanel'
 import { useSportsRegistry } from '../lib/sports'
-import { KINDS } from '../lib/sportsCore'
-import type { Market } from '../lib/contract'
+import { KINDS, KIND_BY_ID, criteriaFor } from '../lib/sportsCore'
 import { OddsButton, TeamLogo, fmtKick } from '../components/sports/parts'
 import { MatchStatus } from '../components/sports/MatchCard'
-import { MarketView } from './MarketDetail'
 
 export default function SportsMatch() {
   const { eventId } = useParams()
   const { records } = useSportsRegistry(30_000)
-  const { data } = useAllMarkets()
-  const byId = useMemo(() => new Map(((data as unknown as Market[] | undefined) ?? []).map(m => [m.id.toString(), m])), [data])
   const r = records?.find(x => x.eventId === eventId)
+  const { markets: byId, lines, refresh } = useSportsMarkets(r ? [r] : undefined, 12_000)
   const [sel, setSel] = useState<{ kind: string; outcome: number } | null>(null)
   useEffect(() => { if (r && !sel) setSel({ kind: r.markets['1x2'] ? '1x2' : Object.keys(r.markets)[0], outcome: 0 }) }, [r]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -24,6 +22,7 @@ export default function SportsMatch() {
 
   const groups = [...new Set(KINDS.filter(k => r.markets[k.id]).map(k => k.group))]
   const selId = sel ? r.markets[sel.kind] : undefined
+  const selLine = selId ? lines.get(selId) : undefined
   const share = async () => {
     const url = window.location.href
     try { if (navigator.share) await navigator.share({ title: `${r.home.name} vs ${r.away.name}`, url }); else { await navigator.clipboard.writeText(url); toast.success('Link copied') } } catch { /* cancelled */ }
@@ -51,6 +50,7 @@ export default function SportsMatch() {
         </div>
       </div>
 
+      <div className="grid lg:grid-cols-[minmax(0,1fr)_380px] gap-5 items-start">
       {/* Betting lines */}
       <div className="rounded-2xl p-5" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
         <div className="flex items-baseline justify-between mb-4">
@@ -81,12 +81,20 @@ export default function SportsMatch() {
         <p className="text-xs mt-5" style={{ color: 'var(--subtle)' }}>Odds are 1 ÷ probability and move as people trade. Settled on the 90-minute score; if the match is cancelled, stakes are refunded.</p>
       </div>
 
-      {/* Full market screen for the selected line */}
-      {selId && sel && (
-        <div id="match-market" className="scroll-mt-20">
-          <MarketView key={`${selId}:${sel.outcome}`} marketId={BigInt(selId)} embedded initialOutcome={sel.outcome} />
-        </div>
-      )}
+      <aside id="match-market" className="scroll-mt-20 space-y-4 lg:sticky lg:top-20">
+        {selLine ? (
+          <>
+            <BetPanel line={selLine} outcome={sel?.outcome ?? 0} onOutcome={i => setSel(x => x && { ...x, outcome: i })} onDone={refresh} />
+            <div className="rounded-2xl p-4 space-y-2 text-sm" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+              <p className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--subtle)' }}>About this line</p>
+              <div className="flex justify-between"><span style={{ color: 'var(--muted)' }}>Backing liquidity</span><b className="tabular-nums">${(Number(selLine.liquidity) / 1e6).toLocaleString()}</b></div>
+              <div className="flex justify-between"><span style={{ color: 'var(--muted)' }}>Betting closes</span><b className="tabular-nums">{fmtKick(Number(selLine.endTime) * 1000)}</b></div>
+              <p className="text-xs pt-1" style={{ color: 'var(--muted)' }}>{KIND_BY_ID[selLine.kind] ? criteriaFor(KIND_BY_ID[selLine.kind]) : 'Settled on the 90-minute score.'}</p>
+            </div>
+          </>
+        ) : <div className="h-64 rounded-2xl skeleton" />}
+      </aside>
+      </div>
     </div>
   )
 }

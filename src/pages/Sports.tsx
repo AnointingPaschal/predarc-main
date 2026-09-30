@@ -1,18 +1,17 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Trophy, CalendarDays, Flag, Layers } from 'lucide-react'
-import { useAllMarkets } from '../hooks/useMarkets'
+import { useSportsMarkets } from '../lib/sportsChain'
 import { useSportsRegistry, pingSportsKeeper } from '../lib/sports'
 import { useSiteConfig } from '../lib/adminConfig'
-import type { Market } from '../lib/contract'
 import type { SportsRecord } from '../lib/sportsCore'
+import MyBets from '../components/sports/MyBets'
 import MatchCard, { isDone } from '../components/sports/MatchCard'
 
 export default function Sports() {
   const cfg = useSiteConfig()
   const { records, error } = useSportsRegistry()
-  const { data } = useAllMarkets()
-  const byId = useMemo(() => new Map(((data as unknown as Market[] | undefined) ?? []).map(m => [m.id.toString(), m])), [data])
-  const [tab, setTab] = useState<'upcoming' | 'results'>('upcoming')
+  const { markets: byId } = useSportsMarkets(records)
+  const [tab, setTab] = useState<'upcoming' | 'results' | 'mine'>('upcoming')
   const [league, setLeague] = useState('all')
   const [day, setDay] = useState('all')
 
@@ -61,10 +60,12 @@ export default function Sports() {
 
       {/* Filters */}
       <div className="flex flex-wrap items-center gap-2 mb-3">
-        {(['upcoming', 'results'] as const).map(t => (
-          <button key={t} onClick={() => { setTab(t); setLeague('all'); setDay('all') }} className="px-4 py-1.5 rounded-full text-sm font-semibold capitalize theme-transition" style={chip(tab === t)}>{t}</button>
+        {(['upcoming', 'results', 'mine'] as const).map(t => (
+          <button key={t} onClick={() => { setTab(t); setLeague('all'); setDay('all') }} className="px-4 py-1.5 rounded-full text-sm font-semibold capitalize theme-transition" style={chip(tab === t)}>{t === 'mine' ? 'My bets' : t}</button>
         ))}
       </div>
+      {tab === 'mine' && <MyBets records={all} />}
+      {tab !== 'mine' && (<>
       {leagues.length > 0 && (
         <div className="flex gap-2 overflow-x-auto pb-2 mb-2 -mx-1 px-1">
           <button onClick={() => { setLeague('all'); setDay('all') }} className="px-3 py-1 rounded-full text-xs font-medium whitespace-nowrap" style={chip(league === 'all')}>All leagues <span style={{ opacity: .6 }}>{pool.length}</span></button>
@@ -104,6 +105,7 @@ export default function Sports() {
           </section>
         ))}
       </div>
+      </>)}
     </div>
   )
 }

@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useConfig, useWriteContract } from 'wagmi'
 import { waitForTransactionReceipt, simulateContract, readContract } from 'wagmi/actions'
-import { erc20Abi, keccak256, toHex, parseUnits } from 'viem'
+import { erc20Abi, parseUnits, decodeEventLog, isAddress } from 'viem'
 import { toast } from 'sonner'
 import { Trophy, Search, RefreshCw, Zap, Square, CheckCircle2, AlertTriangle, Save } from 'lucide-react'
-import { PREDARC_ABI, type Market } from '../../lib/contract'
-import { activeContract, activeChainId, activeUsdc, loadConfig, saveConfig, useNetwork, type SiteConfig } from '../../lib/adminConfig'
+import { SPORTS_ABI } from '../../lib/sportsAbi'
+import { sportsAddress } from '../../lib/sportsChain'
+import { activeChainId, activeUsdc, loadConfig, saveConfig, useNetwork, type SiteConfig } from '../../lib/adminConfig'
 import { saveMarketMeta } from '../../lib/api'
 import { parseOnchainError } from '../../lib/errors'
 import {
@@ -19,7 +20,6 @@ import {
 
 const card = { background: 'var(--surface)', border: '1px solid var(--border)' } as const
 const inputCls = 'px-3 py-2 rounded-lg text-sm outline-none bg-[var(--surface-muted)] border border-[var(--border)] text-[var(--ink)]'
-const CREATED = keccak256(toHex('MarketCreated(uint256,uint8,string,uint256)'))
 const fmt = (ms: number) => new Date(ms).toISOString().replace('T', ' ').slice(5, 16) + ' UTC'
 
 export default function SportsAdmin() {
@@ -81,92 +81,83 @@ export default function SportsAdmin() {
   const totalUsdc = totalMarkets * liqNum
 
   const generate = async () => {
-    const contract = activeContract(), chainId = activeChainId()
-    if (!contract) return toast.error('Set the contract address for this network first (Config).')
+    const contract = sportsAddress(), chainId = activeChainId()
+    if (!contract) return toast.error('Set the Sports contract address for this network first (box at the top).')
     if (!chosen.length || !kinds.length) return
+    if (liqNum < 1) return toast.error('Liquidity must be at least 1 USDC per line. It backs the payouts and you get it back after the match.')
     stop.current = false
-    setRunning({ done: 0, total: totalMarkets, label: liqNum > 0 ? 'Approving USDC…' : 'Starting…' })
+    setRunning({ done: 0, total: chosen.length, label: 'Fetching bookmaker odds…' })
     let created = 0, failed = 0
     try {
-      const liquidity = liqNum > 0 ? parseUnits(String(liqNum), 6) : 0n
-      if (liquidity > 0n) {
-        const need = liquidity * BigInt(totalMarkets)
-        const h = await writeContractAsync({ address: activeUsdc(), chainId, abi: erc20Abi, functionName: 'approve', args: [contract, need] })
-        const r = await waitForTransactionReceipt(wagmi, { hash: h, chainId })
-        if (r.status !== 'success') throw new Error('USDC approval reverted')
-      }
-      // Opening odds: contract v3 can open a market at chosen probabilities; older ones start at equal odds
-      let version = 1
-      try { version = Number(await readContract(wagmi, { address: contract, chainId, abi: PREDARC_ABI, functionName: 'contractVersion' })) } catch { /* v1 */ }
       const odds = new Map<string, { source: string; bps: Record<string, number[]> }>()
-      if (version >= 3) {
-        setRunning({ done: 0, total: totalMarkets, label: 'Fetching bookmaker odds…' })
-        for (let i = 0; i < chosen.length; i += 6) {
-          await Promise.all(chosen.slice(i, i + 6).map(async f => { try { odds.set(f.eventId, await fetchOdds(f.league, f.eventId)) } catch { /* equal odds for this one */ } }))
-        }
-      } else toast.warning('This contract opens every market at equal odds. Deploy the v3 contract (docs/remix/PredarcMarketRemix.sol) to open them at real bookmaker odds.', { duration: 12000 })
+      for (let i = 0; i < chosen.length; i += 6) {
+        await Promise.all(chosen.slice(i, i + 6).map(async f => { try { odds.set(f.eventId, await fetchOdds(f.league, f.eventId)) } catch { /* generic odds for this one */ } }))
+      }
+      const liquidity = parseUnits(String(liqNum), 6)
+      setRunning({ done: 0, total: chosen.length, label: 'Approving USDC…' })
+      const need = liquidity * BigInt(totalMarkets)
+      const h = await writeContractAsync({ address: activeUsdc(), chainId, abi: erc20Abi, functionName: 'approve', args: [contract, need] })
+      const r = await waitForTransactionReceipt(wagmi, { hash: h, chainId })
+      if (r.status !== 'success') throw new Error('USDC approval reverted')
       let done = 0
       for (const f of chosen) {
         if (stop.current) break
-        const markets: Record<string, string> = {}
-        for (const kid of kinds) {
-          if (stop.current) break
-          const kind = KIND_BY_ID[kid]
-          setRunning({ done, total: totalMarkets, label: `${f.home.name} vs ${f.away.name} · ${kind.short}` })
-          try {
-            const outcomes = outcomesFor(kind, f)
-            const base = [outcomes.length === 2 ? 0 : 1, questionFor(kind, f), outcomes, BigInt(endTimeFor(f)), BigInt(resolutionTimeFor(f)), 0n, 0n, SPORTS_CATEGORY, '', liquidity] as const
-            const probs = odds.get(f.eventId)?.bps[kid]
-            const fn = probs && probs.length === outcomes.length ? 'createMarketWithOdds' : 'createMarket'
-            const args = (fn === 'createMarketWithOdds' ? [...base, probs!.map(BigInt)] : base) as never
-            await simulateContract(wagmi, { address: contract, chainId, abi: PREDARC_ABI, functionName: fn, args } as never)
-            const hash = await writeContractAsync({ address: contract, chainId, abi: PREDARC_ABI, functionName: fn, args } as never)
-            const rc = await waitForTransactionReceipt(wagmi, { hash, chainId })
-            if (rc.status !== 'success') throw new Error('reverted')
-            const log = rc.logs.find(l => l.address.toLowerCase() === contract.toLowerCase() && l.topics[0] === CREATED)
-            if (log?.topics[1]) {
-              const id = BigInt(log.topics[1]).toString()
-              markets[kid] = id; created++
-              void saveMarketMeta(id, { description: descriptionFor(f), resolutionCriteria: criteriaFor(kind) }).catch(() => undefined)
-            }
-          } catch (e) {
-            const msg = parseOnchainError(e)
-            if (/reject|denied|cancel/i.test(msg)) { stop.current = true; toast.error('Signature rejected: stopped.'); break }
-            failed++; console.warn('market failed', f.eventId, kid, msg)
+        setRunning({ done, total: chosen.length, label: `${f.home.name} vs ${f.away.name}` })
+        try {
+          const ks = kinds.map(k => KIND_BY_ID[k])
+          const outs = ks.map(k => outcomesFor(k, f))
+          const probs = ks.map((k, i) => {
+            const p = odds.get(f.eventId)?.bps[k.id]
+            return (p && p.length === outs[i].length ? p : outs[i].map(() => Math.round(10000 / outs[i].length))).map(BigInt)
+          })
+          const args = [BigInt(f.eventId), BigInt(endTimeFor(f)), BigInt(resolutionTimeFor(f)), ks.map(k => k.id), ks.map(k => questionFor(k, f)), outs, probs, liquidity] as never
+          await simulateContract(wagmi, { address: contract, chainId, abi: SPORTS_ABI, functionName: 'createMatch', args } as never)
+          const hash = await writeContractAsync({ address: contract, chainId, abi: SPORTS_ABI, functionName: 'createMatch', args } as never)
+          const rc = await waitForTransactionReceipt(wagmi, { hash, chainId })
+          if (rc.status !== 'success') throw new Error('reverted')
+          const markets: Record<string, string> = {}
+          for (const log of rc.logs) {
+            if (log.address.toLowerCase() !== contract.toLowerCase()) continue
+            try {
+              const ev = decodeEventLog({ abi: SPORTS_ABI, data: log.data, topics: log.topics })
+              if (ev.eventName === 'LineCreated') { const a = ev.args as unknown as { lineId: bigint; kind: string }; markets[a.kind] = a.lineId.toString() }
+            } catch { /* other event */ }
           }
-          done++
+          created += Object.keys(markets).length
+          for (const [kid, id] of Object.entries(markets)) void saveMarketMeta(id, { description: descriptionFor(f), resolutionCriteria: criteriaFor(KIND_BY_ID[kid]) }).catch(() => undefined)
+          if (Object.keys(markets).length) {
+            try { await registerFixtures([{ ...f, markets }]) } catch (e) { toast.error(`Lines were created but could not be registered (${e instanceof Error ? e.message : e}). Use “Recover” below.`, { duration: 15000 }) }
+          }
+        } catch (e) {
+          const msg = parseOnchainError(e)
+          if (/reject|denied|cancel/i.test(msg)) { stop.current = true; toast.error('Signature rejected: stopped.'); break }
+          failed++; toast.error(`${f.home.name} vs ${f.away.name}: ${msg}`)
         }
-        if (Object.keys(markets).length) {
-          try { await registerFixtures([{ ...f, markets }]) } catch (e) { toast.error(`Markets were created but could not be registered (${e instanceof Error ? e.message : e}). Use “Recover” below.`, { duration: 15000 }) }
-        }
+        done++
       }
     } catch (e) { toast.error(parseOnchainError(e)) } finally {
       setRunning(null)
-      toast[failed ? 'warning' : 'success'](`${created} market${created === 1 ? '' : 's'} created${failed ? `, ${failed} failed` : ''}`)
+      toast[failed ? 'warning' : 'success'](`${created} line${created === 1 ? '' : 's'} created${failed ? `, ${failed} match${failed === 1 ? '' : 'es'} failed` : ''}`)
       try { const reg = await fetchRegistry(); setRegistry(reg); setFixtures(fs => fs.filter(f => !reg.some(r => r.eventId === f.eventId))) } catch { /* ignore */ }
     }
   }
 
   // ── Recovery: rebuild the registry from markets that exist on chain ──
-  const [orphans, setOrphans] = useState<{ prefix: string; end: number; lines: Record<string, string> }[]>([])
+  const [orphans, setOrphans] = useState<{ eventId: string; lines: Record<string, string> }[]>([])
   const [recovering, setRecovering] = useState(false)
   const scanChain = async () => {
-    const contract = activeContract(); if (!contract) return
+    const contract = sportsAddress(); if (!contract) { setOrphans([]); return }
     try {
-      const all = (await readContract(wagmi, { address: contract, chainId: activeChainId(), abi: PREDARC_ABI, functionName: 'getAllMarkets' })) as unknown as Market[]
-      const registered = new Set(registry.flatMap(r => Object.values(r.markets)))
-      const labelToKind = new Map(KINDS.map(k => [k.label, k.id]))
-      const groups = new Map<string, { prefix: string; end: number; lines: Record<string, string> }>()
-      for (const m of all) {
-        if (m.category !== SPORTS_CATEGORY || registered.has(m.id.toString())) continue
-        const i = m.question.lastIndexOf(' · ')
-        if (i < 0) continue
-        const kind = labelToKind.get(m.question.slice(i + 3)); if (!kind) continue
-        const prefix = m.question.slice(0, i), end = Number(m.endTime)
-        const g = groups.get(`${prefix}|${end}`) ?? { prefix, end, lines: {} }
-        g.lines[kind] = m.id.toString(); groups.set(`${prefix}|${end}`, g)
+      const chainId = activeChainId()
+      const matchIds = (await readContract(wagmi, { address: contract, chainId, abi: SPORTS_ABI, functionName: 'getMatchIds' })) as bigint[]
+      const have = new Set(registry.map(r => r.eventId))
+      const out: { eventId: string; lines: Record<string, string> }[] = []
+      for (const mid of matchIds.filter(m => !have.has(m.toString()))) {
+        const ids = (await readContract(wagmi, { address: contract, chainId, abi: SPORTS_ABI, functionName: 'getMatchLines', args: [mid] })) as bigint[]
+        const lines = (await readContract(wagmi, { address: contract, chainId, abi: SPORTS_ABI, functionName: 'getLines', args: [ids] })) as unknown as { id: bigint; kind: string }[]
+        out.push({ eventId: mid.toString(), lines: Object.fromEntries(lines.map(l => [l.kind, l.id.toString()])) })
       }
-      setOrphans([...groups.values()])
+      setOrphans(out)
     } catch { /* contract not set yet */ }
   }
   useEffect(() => { void scanChain() }, [network, registry.length]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -182,7 +173,7 @@ export default function SportsAdmin() {
       }
       const records: unknown[] = []
       for (const g of orphans) {
-        const f = fx.find(x => Math.floor(x.kickoff / 1000) === g.end && `${x.home.name} vs ${x.away.name}` === g.prefix)
+        const f = fx.find(x => x.eventId === g.eventId)
         if (f) records.push({ ...f, markets: g.lines })
       }
       if (!records.length) { toast.error('No matching fixtures found. Select the leagues these matches belong to (above) and try again.'); return }
@@ -195,34 +186,41 @@ export default function SportsAdmin() {
   // ── Settlement ──
   const check = async () => { try { setDue(await fetchDue()) } catch (e) { toast.error(e instanceof Error ? e.message : 'Could not check results') } }
   const settleActions = async (items: { m: DueMatch; actions: DueMatch['actions']; score?: { home: number; away: number } }[]) => {
-    const contract = activeContract(), chainId = activeChainId()
+    const contract = sportsAddress(), chainId = activeChainId()
+    if (!contract) return toast.error('Set the Sports contract address first.')
     setSettling(true)
     const marks: unknown[] = []
-    let ok = 0, bad = 0
+    let ok = 0
     try {
-      for (const it of items) for (const a of it.actions) {
-        try {
-          const id = BigInt(a.marketId)
-          const mk = (await readContract(wagmi, { address: contract, chainId, abi: PREDARC_ABI, functionName: 'getMarket', args: [id] })) as { status: number }
-          if (mk.status === 2 || mk.status === 3) { marks.push({ eventId: a.eventId, marketId: a.marketId, how: mk.status === 2 ? 'resolved' : 'cancelled', score: it.score }); continue }
-          const req = a.action === 'resolve'
-            ? { address: contract, chainId, abi: PREDARC_ABI, functionName: 'resolveMarket', args: [id, BigInt(a.outcome ?? 0)] } as const
-            : { address: contract, chainId, abi: PREDARC_ABI, functionName: 'cancelMarket', args: [id] } as const
-          await simulateContract(wagmi, req as never)
-          const hash = await writeContractAsync(req as never)
+      const flat = items.flatMap(it => it.actions.map(a => ({ a, score: it.score })))
+      for (let i = 0; i < flat.length; i += 30) {
+        const batch = flat.slice(i, i + 30)
+        const lines = (await readContract(wagmi, { address: contract, chainId, abi: SPORTS_ABI, functionName: 'getLines', args: [batch.map(x => BigInt(x.a.marketId))] })) as unknown as { status: number }[]
+        const rIds: bigint[] = [], rWin: bigint[] = [], cIds: bigint[] = [], rMarks: unknown[] = [], cMarks: unknown[] = []
+        batch.forEach((x, k) => {
+          const st = Number(lines[k]?.status)
+          if (st === 1 || st === 2) { marks.push({ eventId: x.a.eventId, marketId: x.a.marketId, how: st === 1 ? 'resolved' : 'cancelled', score: x.score }); return }
+          if (x.a.action === 'resolve') { rIds.push(BigInt(x.a.marketId)); rWin.push(BigInt(x.a.outcome ?? 0)); rMarks.push({ eventId: x.a.eventId, marketId: x.a.marketId, how: 'resolved', score: x.score }) }
+          else { cIds.push(BigInt(x.a.marketId)); cMarks.push({ eventId: x.a.eventId, marketId: x.a.marketId, how: 'cancelled', score: x.score }) }
+        })
+        const send = async (fn: 'resolveMany' | 'cancelMany', args: unknown[], m: unknown[]) => {
+          const req = { address: contract, chainId, abi: SPORTS_ABI, functionName: fn, args } as never
+          await simulateContract(wagmi, req)
+          const hash = await writeContractAsync(req)
           const rc = await waitForTransactionReceipt(wagmi, { hash, chainId })
           if (rc.status !== 'success') throw new Error('reverted')
-          ok++; marks.push({ eventId: a.eventId, marketId: a.marketId, how: a.action === 'resolve' ? 'resolved' : 'cancelled', score: it.score })
-        } catch (e) {
-          const msg = parseOnchainError(e); bad++
-          if (/reject|denied/i.test(msg)) { toast.error('Signature rejected: stopped.'); throw e }
-          toast.error(`#${a.marketId}: ${msg}`)
+          ok += m.length; marks.push(...m)
         }
+        if (rIds.length) await send('resolveMany', [rIds, rWin], rMarks)
+        if (cIds.length) await send('cancelMany', [cIds], cMarks)
       }
-    } catch { /* stopped */ } finally {
+    } catch (e) {
+      const msg = parseOnchainError(e)
+      toast.error(/reject|denied/i.test(msg) ? 'Signature rejected: stopped.' : msg)
+    } finally {
       if (marks.length) { try { await recordSettled(marks) } catch { /* retried on next check */ } }
       setSettling(false)
-      toast[bad ? 'warning' : 'success'](`${ok} settled${bad ? `, ${bad} failed` : ''}`)
+      if (ok) toast.success(`${ok} line${ok === 1 ? '' : 's'} settled`)
       await reloadRegistry(); await check()
     }
   }
@@ -245,6 +243,22 @@ export default function SportsAdmin() {
     void settleActions([{ m, actions }])
   }
 
+  const [resolverAddr, setResolverAddr] = useState('')
+  const setResolver = async (allowed: boolean) => {
+    const contract = sportsAddress(), chainId = activeChainId(), who = resolverAddr || keeper?.address || ''
+    if (!contract) return toast.error('Save the Sports contract address first.')
+    if (!isAddress(who)) return toast.error('Enter the settlement wallet address.')
+    try {
+      const req = { address: contract, chainId, abi: SPORTS_ABI, functionName: 'setResolver', args: [who, allowed] } as never
+      await simulateContract(wagmi, req)
+      const hash = await writeContractAsync(req)
+      const rc = await waitForTransactionReceipt(wagmi, { hash, chainId })
+      if (rc.status !== 'success') throw new Error('reverted')
+      toast.success(allowed ? 'Settlement wallet authorised' : 'Settlement wallet removed')
+      fetchSportsKeeper().then(setKeeper).catch(() => undefined)
+    } catch (e) { toast.error(parseOnchainError(e)) }
+  }
+
   const saveSettings = async () => {
     try { await saveConfig({ ...cfg, sportsLiquidityUsdc: liqNum }); setCfg(loadConfig()); toast.success('Sports settings saved') } catch (e) { toast.error(e instanceof Error ? e.message : 'Save failed') }
   }
@@ -254,6 +268,24 @@ export default function SportsAdmin() {
 
   return (
     <div className="space-y-5">
+      {/* Contract */}
+      <div className="rounded-2xl p-4 space-y-3" style={card}>
+        <div className="flex flex-wrap items-center gap-2">
+          <b className="text-sm">Sports contract ({network})</b>
+          <input className={`${inputCls} flex-1 min-w-64 font-mono`} placeholder="0x… PredarcSports address (deploy docs/remix/PredarcSportsRemix.sol)" value={cfg[network].sportsAddress ?? ''}
+            onChange={e => setCfg(c => ({ ...c, [network]: { ...c[network], sportsAddress: e.target.value.trim() } }))} />
+          <button onClick={saveSettings} className="px-3 py-2 rounded-lg text-sm font-medium" style={{ background: 'var(--accent)', color: 'var(--accent-text)' }}>Save</button>
+        </div>
+        {!!(cfg[network].sportsAddress) && !isAddress(cfg[network].sportsAddress ?? '') && <p className="text-xs" style={{ color: 'var(--danger, #dc2626)' }}>That is not a valid address.</p>}
+        <div className="flex flex-wrap items-center gap-2 text-xs" style={{ color: 'var(--muted)' }}>
+          <span>Settlement wallet:</span>
+          <input className={`${inputCls} w-80 font-mono`} placeholder="0x… keeper wallet address" value={resolverAddr || keeper?.address || ''} onChange={e => setResolverAddr(e.target.value.trim())} />
+          <button onClick={() => void setResolver(true)} className="px-3 py-1.5 rounded-lg font-medium" style={{ background: 'var(--surface-muted)', border: '1px solid var(--border)' }}>Authorise</button>
+          <button onClick={() => void setResolver(false)} className="px-3 py-1.5 rounded-lg" style={{ border: '1px solid var(--border)' }}>Remove</button>
+          <span>(only the contract owner can do this; the keeper wallet is the one whose key is in <code>SPORTS_RESOLVER_PRIVATE_KEY</code>)</span>
+        </div>
+      </div>
+
       {/* Settings */}
       <div className="rounded-2xl p-4 flex flex-wrap items-center gap-4" style={card}>
         <div className="flex items-center gap-2 font-semibold"><Trophy size={16} style={{ color: 'var(--accent)' }} /> Soccer betting</div>
@@ -335,10 +367,10 @@ export default function SportsAdmin() {
             </div>
             <div className="mt-3 flex flex-wrap items-center gap-3">
               <button onClick={generate} disabled={!!running || !chosen.length || !kinds.length} className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold disabled:opacity-50" style={{ background: 'var(--accent)', color: 'var(--accent-text)' }}>
-                <Zap size={14} /> Create {totalMarkets} market{totalMarkets === 1 ? '' : 's'}</button>
+                <Zap size={14} /> Create {chosen.length} match{chosen.length === 1 ? '' : 'es'} ({totalMarkets} lines)</button>
               {running && <button onClick={() => { stop.current = true }} className="inline-flex items-center gap-1 text-xs px-3 py-2 rounded-lg" style={{ border: '1px solid var(--border)' }}><Square size={12} /> Stop after this one</button>}
               <span className="text-xs" style={{ color: 'var(--subtle)' }}>
-                Each market is one wallet signature{liqNum > 0 ? ` plus one USDC approval; ${totalUsdc.toLocaleString()} USDC total liquidity` : ' (no liquidity: free, but nobody can trade until you add liquidity)'}.
+                One approval, then one signature per match (all its lines at once). Liquidity backs the payouts: {totalUsdc.toLocaleString()} USDC total ({liqNum}/line, min 1). You get it back (plus leftovers) after each match via Withdraw.
               </span>
             </div>
             {running && (
@@ -371,9 +403,9 @@ export default function SportsAdmin() {
         </div>
         <div className="text-xs rounded-lg p-3" style={{ background: 'var(--surface-muted)', color: 'var(--muted)' }}>
           {!keeper?.configured
-            ? <>Automatic settlement is <b>off</b>: add the secret <code>SPORTS_RESOLVER_PRIVATE_KEY</code> in Cloudflare (Pages → Settings → Variables and Secrets) and redeploy. The market contract only lets its <b>owner</b> resolve, so that key must be the owner wallet's. Until then, press the button above after matches end.</>
-            : keeper.isOwner === false
-              ? <><AlertTriangle size={12} className="inline mr-1" style={{ color: 'var(--warning)' }} />Resolver wallet <code>{keeper.address}</code> is <b>not</b> the contract owner, so it can't settle. Use the owner's key or transfer ownership.</>
+            ? <>Automatic settlement is <b>off</b>: add the secret <code>SPORTS_RESOLVER_PRIVATE_KEY</code> in Cloudflare (Pages → Settings → Variables and Secrets) and redeploy. Use a dedicated wallet (not your owner key), fund it with a little gas and authorise it below. Until then, press the button above after matches end.</>
+            : keeper.authorised === false
+              ? <><AlertTriangle size={12} className="inline mr-1" style={{ color: 'var(--warning)' }} />Resolver wallet <code>{keeper.address}</code> is <b>not authorised</b> on the Sports contract yet. Press “Authorise” below with the owner wallet.</>
               : <>Auto-settle is <b>on</b> via <code>{keeper.address}</code> (gas balance {Number(keeper.balance || 0).toFixed(3)}). Finished matches are settled within a minute or two of any visitor being on the site; add a free cron ping to <code>POST /api/sports-keeper?network={network}</code> every 5 minutes so it never depends on visitors.</>}
         </div>
         {due && due.length === 0 && <p className="text-sm" style={{ color: 'var(--subtle)' }}>Nothing is waiting to be settled.</p>}

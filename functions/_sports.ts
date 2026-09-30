@@ -117,7 +117,7 @@ export async function openingOdds(league: string, eventId: string): Promise<{ so
 }
 
 // ── Registry of generated fixtures (KV) ──────────────────────────────────────
-const key = (network: string) => `sports:${network}`
+const key = (network: string) => `sports2:${network}`
 export async function loadRegistry(env: Env, network: string): Promise<SportsRecord[]> {
   try { const v = JSON.parse((await env.PREDARC_KV.get(key(network))) || '[]'); return Array.isArray(v) ? v : [] } catch { return [] }
 }

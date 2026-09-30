@@ -32,6 +32,7 @@ export interface NetworkSettings {
   deployBlock?: number // optional: block the contract was deployed at (speeds up history)
   minLiquidityUsdc: number // UI-side minimum for market creation (the contract enforces its own)
   btcRoundsAddress: string // PredarcBtcRounds contract (Bitcoin Up/Down rounds)
+  sportsAddress?: string   // PredarcSports contract (soccer betting)
 }
 
 export interface SiteConfig {
@@ -149,6 +150,7 @@ export const DEFAULT_CONFIG: SiteConfig = {
     chainlinkEthFeed: ENV.chainlinkEthFeed,
     minLiquidityUsdc: 0,
     btcRoundsAddress: '',
+    sportsAddress: '',
   },
   testnet: {
     contractAddress:  ENV.testnetContractAddress,
@@ -159,6 +161,7 @@ export const DEFAULT_CONFIG: SiteConfig = {
     chainlinkEthFeed: '',
     minLiquidityUsdc: 0,
     btcRoundsAddress: '',
+    sportsAddress: '',
   },
   adminWallet: ENV.adminWallet,
   openrouterApiKey: '',

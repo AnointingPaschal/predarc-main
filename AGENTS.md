@@ -108,10 +108,11 @@ Nothing is generated automatically. In Create / Edit market and on AI drafts, "G
 - Auto-settle: `POST /api/sports-keeper?network=…` resolves everything finished. The contract only lets its OWNER resolve, so set the secret `SPORTS_RESOLVER_PRIVATE_KEY` to the owner wallet's key (fund it with a little USDC for gas). Visitors' browsers ping it while on /sports; add a cron ping every 5 min for reliability. Without the key, use Admin → Sports → "Settle now" (signs with the admin wallet).
 - Toggles in Admin → Sports: `sportsEnabled`, `sportsAutoSettle`.
 
-### Opening odds (contract v3)
-- Markets used to open at equal odds (3.00 on 1X2, 2.00 on two-way lines). `PredarcMarket` v3 adds `createMarketWithOdds(..., probsBps[])`: pools are split inversely to probability (sum unchanged), so `getMarketPrice` returns the requested odds. Every other function is untouched. Simulated in the scratchpad `sim7.mjs` (17 checks).
-- Sports tab: for each fixture it calls `/api/sports?action=odds`, which reads ESPN's bookmaker prices (DraftKings/Bet365; moneyline + total), fits a Poisson goals model (`fitGoals`/`lineProbabilities` in `src/lib/sportsCore.ts`) and returns fair probabilities for all 16 betting lines. Without bookmaker odds a generic prior is used. On a v2 contract it falls back to equal odds and says so.
-- To use it: deploy `docs/remix/PredarcMarketRemix.sol` (v3), put the new address in Admin → Config, then generate sports markets. Existing markets keep their odds.
+### Sports contract (PredarcSports)
+- Sports live in their own contract, `contracts/PredarcSports.sol` (Remix file `docs/remix/PredarcSportsRemix.sol`). `PredarcMarket` is untouched (its v3 `createMarketWithOdds` exists but is optional/unused).
+- Address is `sportsAddress` in Admin → Config (per network). `src/lib/sportsChain.ts` has the ABI, `useSportsLines(ids)` and the `lineToMarket` adapter.
+- `createMatch` makes every line of a match in one tx at real odds (pools ∝ 1/p, owner keeps leftover shares). Resolvers (`setResolver`) can resolve/cancel; keeper uses `SPORTS_RESOLVER_PRIVATE_KEY` (a resolver wallet, not the owner key) via `resolveMany`/`cancelMany`.
+- Simulated in scratchpad `sim8.mjs` (solvency fuzz exact).
 
 ### Auto covers for saved markets
 - While the admin (signed in) has the home page open, `useAutoCovers` generates a cover for each open market without one (same brief-first generator as the editor, one at a time, max 25 per visit, stops after 3 failures). Covers are stored off-chain: `saveMarketMeta` → KV `meta:<net>:<id>` plus a public index `imgindex:<net>` (`GET /api/market-meta?network=&images=1`) that the home page merges with the on-chain `imageUrl`. Toggle: Admin → AI → "Auto-generate covers".

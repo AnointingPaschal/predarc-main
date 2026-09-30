@@ -6,7 +6,7 @@
 //   POST /api/sports { action:'register', network, records }  admin: remember freshly created markets
 //   POST /api/sports { action:'settled',  network, marks }    admin: record settled markets
 import { json, requireAdmin, checkStorage, isNetwork, isMarketId, type Env } from '../_lib'
-import { upcomingFixtures, loadRegistry, saveRegistry, computeDue, markSettled, isLeagueSlug } from '../_sports'
+import { probes, upcomingFixtures, loadRegistry, saveRegistry, computeDue, markSettled, isLeagueSlug } from '../_sports'
 import { LEAGUES, KIND_BY_ID, type SportsRecord } from '../../src/lib/sportsCore'
 
 const clip = (v: unknown, n: number) => String(v ?? '').slice(0, n)
@@ -20,7 +20,7 @@ export const onRequestGet = async ({ request, env }: { request: Request; env: En
     if (!isLeagueSlug(league)) return json({ error: 'league required' }, 400)
     const days = Number(url.searchParams.get('days')) || 7
     const fixtures = await upcomingFixtures(league, days, LEAGUES.find(l => l.id === league)?.name)
-    return json({ fixtures: fixtures ?? [], reachable: fixtures !== null })
+    return json({ fixtures: fixtures ?? [], reachable: fixtures !== null, ...(url.searchParams.get('debug') ? { probes: probes.slice(0, 12) } : {}) })
   }
   const bad = checkStorage(env); if (bad) return bad
   const network = url.searchParams.get('network')

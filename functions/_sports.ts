@@ -16,12 +16,17 @@ interface EspnEvent {
 }
 interface Scoreboard { events?: EspnEvent[]; leagues?: { name?: string }[] }
 
+export const probes: string[] = []
 async function getJson<T>(url: string): Promise<T | null> {
-  try {
-    const r = await fetch(url, { headers: { accept: 'application/json', 'user-agent': 'Mozilla/5.0 Predarc' }, cf: { cacheTtl: 60, cacheEverything: true } } as RequestInit)
-    if (!r.ok) return null
-    return (await r.json()) as T
-  } catch { return null }
+  for (const [i, init] of [{ headers: { accept: 'application/json', 'user-agent': 'Mozilla/5.0 (compatible; Predarc/1.0)' } }, {}].entries()) {
+    try {
+      const r = await fetch(url, init as RequestInit)
+      if (r.ok) return (await r.json()) as T
+      probes.push(`${r.status} ${url.replace(BASE, '')} (try ${i + 1})`)
+      if (r.status === 400 || r.status === 404) return null
+    } catch (e) { probes.push(`ERR ${(e as Error).message.slice(0, 80)} ${url.replace(BASE, '')} (try ${i + 1})`) }
+  }
+  return null
 }
 
 const team = (c?: EspnComp) => ({ name: c?.team?.displayName || c?.team?.shortDisplayName || '?', abbr: c?.team?.abbreviation || '', logo: c?.team?.logo || '' })

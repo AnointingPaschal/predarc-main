@@ -65,6 +65,7 @@ export interface SiteConfig {
   openrouterApiKey: string
   openrouterModel: string
   openrouterWebSearch: boolean   // append :online so the model can search the web
+  aiAutoCovers: boolean          // while the admin browses the home page, generate covers for markets that have none
   aiImageSvgFallback: boolean    // let the text model draw a simple SVG cover when no image model is available
   openrouterImageModel: string   // image-capable model used to paint market covers ('' = draw SVG covers with the text model)
   aiInitialLiquidityUsdc: number // initial liquidity for AI-published markets (0 = free)
@@ -164,6 +165,7 @@ export const DEFAULT_CONFIG: SiteConfig = {
   openrouterModel: 'openai/gpt-4o-mini',
   openrouterWebSearch: false,
   openrouterImageModel: 'google/gemini-2.5-flash-image',
+  aiAutoCovers: true,
   aiImageSvgFallback: false,
   aiInitialLiquidityUsdc: 0,
   aiAutoGenEnabled: false,

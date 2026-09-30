@@ -1014,8 +1014,12 @@ function ConfigTab() {
           </label>
           <Field label="Image model for market covers">
             <input value={config.openrouterImageModel} onChange={e => setConfig(c => ({ ...c, openrouterImageModel: e.target.value.trim() }))} placeholder="google/gemini-2.5-flash-image" className={inputCls + ' mono'} />
-            <p className="text-[11px] mt-1" style={{ color: 'var(--subtle)' }}>Nothing is generated automatically. Use “Generate with AI” when creating or editing a market, or on an AI draft. Your AI first writes a picture brief from the question (its countries, teams, coins…), optionally researching online, then this model paints exactly that. Each picture costs a little image-model credit.</p>
+            <p className="text-[11px] mt-1" style={{ color: 'var(--subtle)' }}>Use “Generate with AI” when creating or editing a market, or on an AI draft; saved markets without a cover are filled in automatically (option below). Your AI first writes a picture brief from the question (its countries, teams, coins…), optionally researching online, then this model paints exactly that. Each picture costs a little image-model credit.</p>
           </Field>
+          <label className="flex items-start gap-2 text-xs cursor-pointer" style={{ color: 'var(--muted)' }}>
+            <input type="checkbox" className="mt-0.5" checked={config.aiAutoCovers !== false} onChange={e => setConfig(c => ({ ...c, aiAutoCovers: e.target.checked }))} />
+            <span>Auto-generate covers for saved markets that have none. Runs only while you (the admin, signed in) have the home page open, one market at a time, and stops after 25 per visit. Each uses a little image-model credit.</span>
+          </label>
           <label className="flex items-start gap-2 text-xs cursor-pointer" style={{ color: 'var(--muted)' }}>
             <input type="checkbox" className="mt-0.5" checked={config.aiImageSvgFallback} onChange={e => setConfig(c => ({ ...c, aiImageSvgFallback: e.target.checked }))} />
             <span>If the image model fails, let the text model draw a simple SVG cover. Off = no image rather than a vague one.</span>

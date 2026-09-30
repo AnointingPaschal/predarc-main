@@ -123,8 +123,8 @@ export function MarketView({ marketId, embedded = false, initialOutcome = 0 }: {
           {/* Header */}
           <div className="rounded-xl p-5" style={card}>
             <div className="flex gap-4">
-              {market.imageUrl && !market.imageUrl.startsWith('data:') && (
-                <img src={market.imageUrl} alt="" className="w-16 h-16 rounded-xl object-cover flex-shrink-0" onError={e => { e.currentTarget.style.display = 'none' }} />
+              {(market.imageUrl || meta.imageUrl) && !(market.imageUrl || '').startsWith('data:') && (
+                <img src={market.imageUrl || meta.imageUrl} alt="" className="w-16 h-16 rounded-xl object-cover flex-shrink-0" onError={e => { e.currentTarget.style.display = 'none' }} />
               )}
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-2 mb-2">

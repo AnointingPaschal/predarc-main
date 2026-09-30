@@ -66,6 +66,9 @@ export interface MarketMeta {
 export const fetchMarketMeta = async (market: bigint | string, network?: Network): Promise<MarketMeta> =>
   (await parse<{ meta: MarketMeta }>(await fetch(`/api/market-meta?${qs(market, network)}`, { cache: 'no-store' }))).meta
 
+export const fetchImageIndex = async (network?: Network): Promise<Record<string, string>> =>
+  (await parse<{ images: Record<string, string> }>(await fetch(`/api/market-meta?network=${network ?? getEffectiveNetwork()}&images=1`, { cache: 'no-store' }))).images
+
 export async function saveMarketMeta(market: bigint | string, meta: MarketMeta, network: Network = getEffectiveNetwork()): Promise<MarketMeta> {
   return (await parse<{ meta: MarketMeta }>(await fetch('/api/market-meta', {
     method: 'PUT', headers: { 'content-type': 'application/json', ...adminAuthHeaders() },

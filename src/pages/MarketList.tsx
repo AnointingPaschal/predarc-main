@@ -1,13 +1,15 @@
 import { useState, useMemo, useEffect } from 'react'
 import { Link } from 'react-router-dom'
-import { Search, TrendingUp, Zap, BarChart2, Activity, Trophy, LayoutGrid, Bitcoin, Landmark, Clapperboard, FlaskConical, Banknote, Shapes, ArrowRight, X } from 'lucide-react'
+import { Search, TrendingUp, Zap, BarChart2, Activity, Trophy, LayoutGrid, Bitcoin, Landmark, Clapperboard, Sparkles, FlaskConical, Banknote, Shapes, ArrowRight, X } from 'lucide-react'
 import MarketCard from '../components/MarketCard'
 import HeroPredictions from '../components/HeroPredictions'
 import MatchCard, { isDone } from '../components/sports/MatchCard'
 import { BtcCard } from '../components/BtcPromo'
 import { useAllMarkets } from '../hooks/useMarkets'
 import { useSportsRegistry, pingSportsKeeper } from '../lib/sports'
-import { useSiteConfig } from '../lib/adminConfig'
+import { useSiteConfig, isAdminAddress } from '../lib/adminConfig'
+import { useAccount } from 'wagmi'
+import { useAutoCovers, useImageIndex } from '../hooks/useAutoCovers'
 import type { SportsRecord } from '../lib/sportsCore'
 import { Market, MarketStatus, MarketType, CATEGORIES, formatUsdc } from '../lib/contract'
 
@@ -31,7 +33,11 @@ export default function MarketList() {
 
   const allMarkets = (markets as unknown as Market[] | undefined) ?? []
   const byId = useMemo(() => new Map(allMarkets.map(m => [m.id.toString(), m])), [allMarkets])
-  const images = useMemo(() => Object.fromEntries(allMarkets.map(m => [m.id.toString(), m.imageUrl && !m.imageUrl.startsWith('data:') ? m.imageUrl : ''])), [allMarkets])
+  const { index: imageIndex, add: addImage } = useImageIndex()
+  const images = useMemo(() => Object.fromEntries(allMarkets.map(m => [m.id.toString(), (m.imageUrl && !m.imageUrl.startsWith('data:') ? m.imageUrl : '') || imageIndex[m.id.toString()] || ''])), [allMarkets, imageIndex])
+  const { address } = useAccount()
+  const isAdmin = isAdminAddress(address, cfg.adminWallet)
+  const covers = useAutoCovers({ enabled: isAdmin && cfg.aiAutoCovers !== false && !isLoading, markets: allMarkets, hasImage: m => !!images[m.id.toString()], onDone: addImage })
   const sportsOn = cfg.sportsEnabled !== false
   useEffect(() => { if (sportsOn && cfg.sportsAutoSettle !== false && records?.length) pingSportsKeeper() }, [sportsOn, cfg.sportsAutoSettle, records?.length])
 
@@ -102,6 +108,15 @@ export default function MarketList() {
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8">
       <HeroPredictions markets={heroMarkets} images={images} />
+
+      {isAdmin && cfg.aiAutoCovers !== false && (covers.running || covers.needsSignIn || covers.error) && (
+        <div className="flex flex-wrap items-center gap-3 rounded-xl px-4 py-2.5 mb-5 text-xs" style={{ background: 'var(--accent-bg)', border: '1px solid var(--border)', color: 'var(--muted)' }}>
+          <Sparkles size={14} className={covers.running ? 'animate-pulse' : ''} style={{ color: 'var(--accent)' }} />
+          {covers.needsSignIn ? <span>Sign in on the Admin page to let covers generate automatically for markets without an image.</span>
+            : <span className="flex-1 min-w-40 truncate">{covers.running ? <>Generating covers · {covers.done} done, {covers.remaining} to go{covers.current ? ` · ${covers.current}` : ''}</> : null}{covers.error && <span style={{ color: 'var(--warning)' }}> {covers.error}</span>}</span>}
+          {covers.running && <button onClick={covers.stop} className="px-2.5 py-1 rounded-lg font-semibold" style={{ border: '1px solid var(--border)', color: 'var(--ink)' }}>Stop</button>}
+        </div>
+      )}
 
       {/* Stats */}
       {!isLoading && allMarkets.length > 0 && (

@@ -21,13 +21,22 @@ const CATEGORY_COLORS: Record<string, string> = {
   Other: 'var(--muted)',
 }
 
-// Option colours come from the site theme (Branding tab), so they follow any palette you set.
-const PALETTE = ['var(--accent)', 'var(--warning)', 'var(--success)', 'var(--danger)', 'var(--muted)', 'color-mix(in srgb, var(--accent) 55%, var(--danger))', 'color-mix(in srgb, var(--success) 55%, var(--accent))', 'color-mix(in srgb, var(--warning) 55%, var(--danger))']
-/** Consistent colour per outcome: Yes = theme success, No = theme danger, others cycle through theme colours. */
+// Option colours: blue + dark slate, taken from the site theme (Branding tab) so they follow any palette you set.
+const PALETTE = [
+  'var(--accent)',
+  'var(--muted)',
+  'color-mix(in srgb, var(--accent) 60%, var(--surface))',
+  'color-mix(in srgb, var(--muted) 60%, var(--surface))',
+  'color-mix(in srgb, var(--accent) 40%, var(--ink))',
+  'color-mix(in srgb, var(--muted) 45%, var(--ink))',
+  'color-mix(in srgb, var(--accent) 35%, var(--surface))',
+  'color-mix(in srgb, var(--muted) 35%, var(--surface))',
+]
+/** Consistent colour per outcome: first/Yes = theme blue, second/No = theme slate, extra options cycle through tints of both. */
 export function outcomeColor(name: string, i: number, total: number): string {
-  if (/^yes$/i.test(name.trim())) return 'var(--success)'
-  if (/^no$/i.test(name.trim())) return 'var(--danger)'
-  if (total === 2) return i === 0 ? 'var(--accent)' : 'var(--warning)'
+  if (/^yes$/i.test(name.trim())) return PALETTE[0]
+  if (/^no$/i.test(name.trim())) return PALETTE[1]
+  if (total === 2) return i === 0 ? PALETTE[0] : PALETTE[1]
   return PALETTE[i % PALETTE.length]
 }
 

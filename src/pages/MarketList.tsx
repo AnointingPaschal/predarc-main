@@ -3,7 +3,7 @@ import { Search, TrendingUp, Zap, BarChart2, Activity } from 'lucide-react'
 import MarketCard from '../components/MarketCard'
 import HeroPredictions from '../components/HeroPredictions'
 import { useMarketImages } from '../hooks/useMarketImages'
-import { BtcCard, BtcResultsCard } from '../components/BtcPromo'
+import { BtcCard } from '../components/BtcPromo'
 import { useAllMarkets } from '../hooks/useMarkets'
 import { Market, MarketStatus, MarketType, CATEGORIES, formatUsdc } from '../lib/contract'
 
@@ -57,7 +57,7 @@ export default function MarketList() {
 
       <HeroPredictions markets={allMarkets} images={images} />
 
-      <div className="xl:grid xl:grid-cols-[minmax(0,1fr)_300px] xl:gap-6 items-start">
+      <div>
         <div className="min-w-0">
       {/* Stats bar */}
       {!isLoading && allMarkets.length > 0 && (
@@ -171,16 +171,13 @@ export default function MarketList() {
               {filtered.length} market{filtered.length !== 1 ? 's' : ''}
             </p>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             <BtcCard />
             {filtered.map(m => <MarketCard key={m.id.toString()} market={m} image={images[m.id.toString()]} />)}
           </div>
         </>
       )}
         </div>
-        <aside className="hidden xl:block sticky top-20 space-y-4">
-          <BtcResultsCard />
-        </aside>
       </div>
     </div>
   )

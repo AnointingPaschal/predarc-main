@@ -4,7 +4,7 @@ import { waitForTransactionReceipt, simulateContract, readContract } from 'wagmi
 import { erc20Abi, keccak256, toHex, parseUnits } from 'viem'
 import { toast } from 'sonner'
 import { Trophy, Search, RefreshCw, Zap, Square, CheckCircle2, AlertTriangle, Save } from 'lucide-react'
-import { PREDARC_ABI } from '../../lib/contract'
+import { PREDARC_ABI, type Market } from '../../lib/contract'
 import { activeContract, activeChainId, activeUsdc, loadConfig, saveConfig, useNetwork, type SiteConfig } from '../../lib/adminConfig'
 import { saveMarketMeta } from '../../lib/api'
 import { parseOnchainError } from '../../lib/errors'
@@ -124,7 +124,7 @@ export default function SportsAdmin() {
           done++
         }
         if (Object.keys(markets).length) {
-          try { await registerFixtures([{ ...f, markets }]) } catch (e) { toast.error(`Markets were created but could not be registered: ${e instanceof Error ? e.message : e}`) }
+          try { await registerFixtures([{ ...f, markets }]) } catch (e) { toast.error(`Markets were created but could not be registered (${e instanceof Error ? e.message : e}). Use “Recover” below.`, { duration: 15000 }) }
         }
       }
     } catch (e) { toast.error(parseOnchainError(e)) } finally {
@@ -132,6 +132,51 @@ export default function SportsAdmin() {
       toast[failed ? 'warning' : 'success'](`${created} market${created === 1 ? '' : 's'} created${failed ? `, ${failed} failed` : ''}`)
       try { const reg = await fetchRegistry(); setRegistry(reg); setFixtures(fs => fs.filter(f => !reg.some(r => r.eventId === f.eventId))) } catch { /* ignore */ }
     }
+  }
+
+  // ── Recovery: rebuild the registry from markets that exist on chain ──
+  const [orphans, setOrphans] = useState<{ prefix: string; end: number; lines: Record<string, string> }[]>([])
+  const [recovering, setRecovering] = useState(false)
+  const scanChain = async () => {
+    const contract = activeContract(); if (!contract) return
+    try {
+      const all = (await readContract(wagmi, { address: contract, chainId: activeChainId(), abi: PREDARC_ABI, functionName: 'getAllMarkets' })) as unknown as Market[]
+      const registered = new Set(registry.flatMap(r => Object.values(r.markets)))
+      const labelToKind = new Map(KINDS.map(k => [k.label, k.id]))
+      const groups = new Map<string, { prefix: string; end: number; lines: Record<string, string> }>()
+      for (const m of all) {
+        if (m.category !== SPORTS_CATEGORY || registered.has(m.id.toString())) continue
+        const i = m.question.lastIndexOf(' · ')
+        if (i < 0) continue
+        const kind = labelToKind.get(m.question.slice(i + 3)); if (!kind) continue
+        const prefix = m.question.slice(0, i), end = Number(m.endTime)
+        const g = groups.get(`${prefix}|${end}`) ?? { prefix, end, lines: {} }
+        g.lines[kind] = m.id.toString(); groups.set(`${prefix}|${end}`, g)
+      }
+      setOrphans([...groups.values()])
+    } catch { /* contract not set yet */ }
+  }
+  useEffect(() => { void scanChain() }, [network, registry.length]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const recover = async () => {
+    setRecovering(true)
+    try {
+      const ids = [...new Set([...leagues, ...custom.split(/[\s,]+/).filter(Boolean)])]
+      const fx: Fixture[] = []
+      for (let i = 0; i < ids.length; i += 6) {
+        const got = await Promise.all(ids.slice(i, i + 6).map(id => fetchFixtures(id, 30).then(r => r.fixtures).catch(() => [] as Fixture[])))
+        fx.push(...got.flat())
+      }
+      const records: unknown[] = []
+      for (const g of orphans) {
+        const f = fx.find(x => Math.floor(x.kickoff / 1000) === g.end && `${x.home.name} vs ${x.away.name}` === g.prefix)
+        if (f) records.push({ ...f, markets: g.lines })
+      }
+      if (!records.length) { toast.error('No matching fixtures found. Select the leagues these matches belong to (above) and try again.'); return }
+      await registerFixtures(records)
+      toast.success(`Recovered ${records.length} match${records.length === 1 ? '' : 'es'}`)
+      await reloadRegistry()
+    } catch (e) { toast.error(e instanceof Error ? e.message : 'Recovery failed') } finally { setRecovering(false) }
   }
 
   // ── Settlement ──
@@ -292,6 +337,14 @@ export default function SportsAdmin() {
           </div>
         )}
       </div>
+
+      {orphans.length > 0 && (
+        <div className="rounded-2xl p-4 flex flex-wrap items-center gap-3 text-sm" style={{ background: 'color-mix(in srgb, var(--warning) 12%, var(--surface))', border: '1px solid var(--warning)' }}>
+          <AlertTriangle size={16} style={{ color: 'var(--warning)' }} />
+          <span className="flex-1 min-w-48"><b>{orphans.length} match{orphans.length === 1 ? '' : 'es'}</b> ({orphans.reduce((n, g) => n + Object.keys(g.lines).length, 0)} markets) exist on chain but aren't on the Sports page yet. Select their leagues above, then recover them.</span>
+          <button onClick={recover} disabled={recovering} className="px-3 py-1.5 rounded-lg text-xs font-semibold disabled:opacity-50" style={{ background: 'var(--accent)', color: 'var(--accent-text)' }}>{recovering ? 'Recovering…' : 'Recover'}</button>
+        </div>
+      )}
 
       {/* Settle */}
       <div className="rounded-2xl p-4 space-y-3" style={card}>

@@ -15,12 +15,6 @@ const cleanTeam = (t: unknown) => { const o = (t && typeof t === 'object' ? t : 
 export const onRequestGet = async ({ request, env }: { request: Request; env: Env }): Promise<Response> => {
   const url = new URL(request.url); const action = url.searchParams.get('action')
   if (action === 'leagues') return json({ leagues: LEAGUES })
-  if (action === 'probe') {
-    const u = url.searchParams.get('u') || ''
-    if (!/^https:\/\/(sports\.core\.api|cdn)\.espn\.com\//.test(u)) return json({ error: 'host' }, 400)
-    const r = await fetch(u, { headers: { accept: 'application/json' } })
-    return new Response((await r.text()).slice(0, 6000), { status: r.status, headers: { 'content-type': 'text/plain' } })
-  }
   if (action === 'fixtures') {
     const league = url.searchParams.get('league')
     if (!isLeagueSlug(league)) return json({ error: 'league required' }, 400)

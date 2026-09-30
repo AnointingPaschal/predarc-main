@@ -2,91 +2,90 @@
 import { KIND_BY_ID, interpretResult, type Fixture, type SportsRecord } from '../src/lib/sportsCore'
 import type { Env } from './_lib'
 
-const BASE = 'https://site.api.espn.com/apis/site/v2/sports/soccer'
+// ESPN's "site" API answers 403 to cloud servers, but the "core" API is open. Its list endpoints return $ref links,
+// so an event costs a couple of extra requests; work is capped to stay inside the Workers subrequest limit.
+const CORE = 'https://sports.core.api.espn.com/v2/sports/soccer/leagues'
 const ymd = (ms: number) => new Date(ms).toISOString().slice(0, 10).replace(/-/g, '')
 const SLUG = /^[a-z0-9._-]{2,40}$/i
 export const isLeagueSlug = (v: unknown): v is string => typeof v === 'string' && SLUG.test(v)
-
-interface EspnTeam { displayName?: string; shortDisplayName?: string; abbreviation?: string; logo?: string }
-interface EspnComp { homeAway?: string; score?: string | number; team?: EspnTeam }
-interface EspnEvent {
-  id?: string; date?: string
-  status?: { type?: { name?: string; state?: string } }
-  competitions?: { competitors?: EspnComp[]; status?: { type?: { name?: string; state?: string } } }[]
-}
-interface Scoreboard { events?: EspnEvent[]; leagues?: { name?: string }[] }
+export const logoOf = (teamId: string) => `https://a.espncdn.com/i/teamlogos/soccer/500/${teamId}.png`
+const https = (u: string) => u.replace(/^http:\/\//, 'https://')
 
 export const probes: string[] = []
 async function getJson<T>(url: string): Promise<T | null> {
-  for (const [i, init] of [{ headers: { accept: 'application/json', 'user-agent': 'Mozilla/5.0 (compatible; Predarc/1.0)' } }, {}].entries()) {
-    try {
-      const r = await fetch(url, init as RequestInit)
-      if (r.ok) return (await r.json()) as T
-      probes.push(`${r.status} ${url.replace(BASE, '')} (try ${i + 1})`)
-      if (r.status === 400 || r.status === 404) return null
-    } catch (e) { probes.push(`ERR ${(e as Error).message.slice(0, 80)} ${url.replace(BASE, '')} (try ${i + 1})`) }
-  }
+  try {
+    const r = await fetch(https(url), { headers: { accept: 'application/json' } })
+    if (r.ok) return (await r.json()) as T
+    probes.push(`${r.status} ${url.replace(CORE, '')}`)
+  } catch (e) { probes.push(`ERR ${(e as Error).message.slice(0, 80)} ${url.replace(CORE, '')}`) }
   return null
 }
 
-const team = (c?: EspnComp) => ({ name: c?.team?.displayName || c?.team?.shortDisplayName || '?', abbr: c?.team?.abbreviation || '', logo: c?.team?.logo || '' })
+interface Ref { $ref?: string }
+interface CoreEvent {
+  id?: string; date?: string; name?: string; shortName?: string
+  competitions?: { id?: string; competitors?: { id?: string; homeAway?: string; team?: Ref; score?: Ref }[]; status?: Ref }[]
+}
+const idFromRef = (r?: Ref) => (r?.$ref ?? '').match(/\/(\d+)(?:\?|$)/)?.[1] ?? ''
 
-async function scoreboard(league: string, from: number, to: number): Promise<Scoreboard | null> {
-  const q = from === to ? ymd(from) : `${ymd(from)}-${ymd(to)}`
-  const ranged = await getJson<Scoreboard>(`${BASE}/${league}/scoreboard?dates=${q}&limit=300`) ?? (from === to ? null : await getJson<Scoreboard>(`${BASE}/${league}/scoreboard?dates=${q}`))
-  if (ranged || from === to) return ranged
-  // Ranges are rejected by some leagues/proxies: ask day by day (a few at a time), up to a month
-  const days: number[] = []
-  for (let t = from; t <= to && days.length < 31; t += 86_400_000) days.push(t)
-  const events: EspnEvent[] = []; let name: string | undefined; let any = false
-  for (let i = 0; i < days.length; i += 6) {
-    const got = await Promise.all(days.slice(i, i + 6).map(t => getJson<Scoreboard>(`${BASE}/${league}/scoreboard?dates=${ymd(t)}&limit=300`)))
-    for (const day of got) if (day) { any = true; events.push(...(day.events ?? [])); name = name ?? day.leagues?.[0]?.name }
-  }
-  return any ? { events, leagues: [{ name }] } : null
+async function pool<T, R>(items: T[], n: number, fn: (x: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = []
+  for (let i = 0; i < items.length; i += n) out.push(...await Promise.all(items.slice(i, i + n).map(fn)))
+  return out
+}
+
+async function eventDetail(league: string, eventId: string) {
+  return getJson<CoreEvent>(`${CORE}/${league}/events/${eventId}`)
 }
 
 /** Upcoming (not started) fixtures for a league within the next `days` days. `null` means the feed could not be reached. */
 export async function upcomingFixtures(league: string, days: number, leagueName?: string): Promise<Fixture[] | null> {
   const now = Date.now()
-  const sb = await scoreboard(league, now, now + Math.max(1, Math.min(30, days)) * 86_400_000)
-  if (!sb) return null
-  const name = leagueName || sb.leagues?.[0]?.name || league
-  const seen = new Set<string>()
+  const to = now + Math.max(1, Math.min(30, days)) * 86_400_000
+  const list = await getJson<{ items?: Ref[] }>(`${CORE}/${league}/events?dates=${ymd(now)}-${ymd(to)}&limit=100`)
+  if (!list) return null
+  const ids = (list.items ?? []).map(i => idFromRef(i)).filter(Boolean).slice(0, 40)
+  const events = (await pool(ids, 10, id => eventDetail(league, id))).filter((e): e is CoreEvent => !!e)
   const out: Fixture[] = []
-  for (const e of sb.events ?? []) {
-    const comp = e.competitions?.[0]
-    const state = e.status?.type?.state ?? comp?.status?.type?.state
+  for (const e of events) {
     const kickoff = Date.parse(e.date ?? '')
-    if (!e.id || seen.has(String(e.id)) || !comp?.competitors || state !== 'pre' || !Number.isFinite(kickoff) || kickoff < now + 15 * 60_000) continue
-    const home = comp.competitors.find(c => c.homeAway === 'home'), away = comp.competitors.find(c => c.homeAway === 'away')
-    if (!home || !away) continue
-    seen.add(String(e.id))
-    out.push({ eventId: String(e.id), league, leagueName: name, kickoff, home: team(home), away: team(away) })
+    const comp = e.competitions?.[0]
+    const home = comp?.competitors?.find(c => c.homeAway === 'home'), away = comp?.competitors?.find(c => c.homeAway === 'away')
+    if (!e.id || !home?.id || !away?.id || !Number.isFinite(kickoff) || kickoff < now + 15 * 60_000) continue
+    const short = (e.shortName ?? '').split(/\s+(?:@|vs)\s+/i) // "AWAY @ HOME"
+    const name = (e.name ?? '')
+    let hn = '', an = ''
+    const at = name.split(/\s+at\s+/); if (at.length === 2) { an = at[0]; hn = at[1] }
+    if (!hn || !an) { // neutral venue ("A vs B") or odd names: ask for the team names
+      const [h, a] = await Promise.all([getJson<{ displayName?: string }>(home.team?.$ref ?? ''), getJson<{ displayName?: string }>(away.team?.$ref ?? '')])
+      hn = h?.displayName ?? ''; an = a?.displayName ?? ''
+    }
+    if (!hn || !an) continue
+    out.push({
+      eventId: String(e.id), league, leagueName: leagueName || league, kickoff,
+      home: { name: hn, abbr: short[1] ?? '', logo: logoOf(home.id) },
+      away: { name: an, abbr: short[0] ?? '', logo: logoOf(away.id) },
+    })
   }
   return out.sort((a, b) => a.kickoff - b.kickoff)
 }
 
-/** Current status and score of one match, looked up on the scoreboard of its kick-off day (then the summary endpoint). */
+/** Current status and score of one match. */
 export async function matchResult(r: Pick<SportsRecord, 'league' | 'eventId' | 'kickoff'>) {
-  const day = (delta: number) => r.kickoff + delta * 86_400_000
-  for (const d of [0, 1, -1]) {
-    const sb = await getJson<Scoreboard>(`${BASE}/${r.league}/scoreboard?dates=${ymd(day(d))}&limit=300`)
-    const e = sb?.events?.find(x => String(x.id) === r.eventId)
-    const comp = e?.competitions?.[0]
-    if (e && comp?.competitors) {
-      const status = e.status?.type?.name ?? comp.status?.type?.name ?? ''
-      const h = comp.competitors.find(c => c.homeAway === 'home'), a = comp.competitors.find(c => c.homeAway === 'away')
-      return interpretResult(status, h?.score ?? '', a?.score ?? '')
-    }
-  }
-  const sum = await getJson<{ header?: { competitions?: EspnEvent['competitions'] } }>(`${BASE}/${r.league}/summary?event=${r.eventId}`)
-  const comp = sum?.header?.competitions?.[0]
-  if (comp?.competitors) {
-    const h = comp.competitors.find(c => c.homeAway === 'home'), a = comp.competitors.find(c => c.homeAway === 'away')
-    return interpretResult(comp.status?.type?.name ?? '', h?.score ?? '', a?.score ?? '')
-  }
-  return interpretResult('', '', '')
+  const ev = await eventDetail(r.league, r.eventId)
+  const comp = ev?.competitions?.[0]
+  if (!comp?.competitors) return interpretResult('', '', '')
+  const home = comp.competitors.find(c => c.homeAway === 'home'), away = comp.competitors.find(c => c.homeAway === 'away')
+  if (!home?.id || !away?.id) return interpretResult('', '', '')
+  const cid = comp.id ?? r.eventId
+  const base = `${CORE}/${r.league}/events/${r.eventId}/competitions/${cid}`
+  const [st, hs, as] = await Promise.all([
+    getJson<{ type?: { name?: string } }>(`${base}/status`),
+    getJson<{ value?: number; displayValue?: string }>(`${base}/competitors/${home.id}/score`),
+    getJson<{ value?: number; displayValue?: string }>(`${base}/competitors/${away.id}/score`),
+  ])
+  const num = (x: { value?: number; displayValue?: string } | null) => (x ? (x.value ?? x.displayValue ?? '') : '')
+  return interpretResult(st?.type?.name ?? '', num(hs), num(as))
 }
 
 // ── Registry of generated fixtures (KV) ──────────────────────────────────────
@@ -107,7 +106,7 @@ export interface DueMatch {
 }
 
 /** Which markets of finished matches can be settled right now, and how. */
-export async function computeDue(env: Env, network: string, limit = 12): Promise<DueMatch[]> {
+export async function computeDue(env: Env, network: string, limit = 8): Promise<DueMatch[]> {
   const list = await loadRegistry(env, network)
   const now = Date.now()
   const open = list.filter(r => now > r.kickoff + 100 * 60_000 && Object.values(r.markets).some(id => !r.settled[id])).sort((a, b) => a.kickoff - b.kickoff).slice(0, limit)

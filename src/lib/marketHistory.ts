@@ -13,18 +13,25 @@ const EV = {
 
 type AnyLog = { blockNumber: bigint; logIndex: number; transactionHash: string; args: Record<string, unknown> }
 
-/** getLogs that halves the block range whenever the RPC rejects it. */
-export async function getLogsAdaptive(client: PublicClient, address: `0x${string}`, event: AbiEvent, from: bigint, to: bigint, args?: Record<string, unknown>, depth = 0): Promise<AnyLog[]> {
+/** Errors that mean "ask for a smaller block range" (as opposed to rate limits, outages, bad params). */
+const RANGE_ERR = /range|exceed|too many|too large|too much|more than|limit|10000|query returned|response size/i
+const RATE_ERR = /429|rate|too many requests|timeout|timed out|fetch failed|failed to fetch|network/i
+
+/**
+ * getLogs that halves the block range when the RPC rejects it for size. Splits one half at a time and shares a
+ * request budget, so a misbehaving or rate-limited RPC fails fast instead of fanning out into thousands of calls.
+ */
+export async function getLogsAdaptive(client: PublicClient, address: `0x${string}`, event: AbiEvent, from: bigint, to: bigint, args?: Record<string, unknown>, budget: { left: number } = { left: 48 }): Promise<AnyLog[]> {
+  if (budget.left-- <= 0) throw new Error('The RPC rejected the log query too many times. Try again in a moment, or set a better RPC URL in Admin → Config.')
   try {
     const logs = await client.getLogs({ address, event: event as never, args: args as never, fromBlock: from, toBlock: to })
     return logs as unknown as AnyLog[]
   } catch (e) {
-    if (to - from < 1000n || depth > 24) throw e
+    const msg = e instanceof Error ? `${e.message} ${(e as { details?: string }).details ?? ''}` : String(e)
+    if (to - from < 1000n || (RATE_ERR.test(msg) && !RANGE_ERR.test(msg)) || !RANGE_ERR.test(msg)) throw e
     const mid = from + (to - from) / 2n
-    const [a, b] = await Promise.all([
-      getLogsAdaptive(client, address, event, from, mid, args, depth + 1),
-      getLogsAdaptive(client, address, event, mid + 1n, to, args, depth + 1),
-    ])
+    const a = await getLogsAdaptive(client, address, event, from, mid, args, budget)
+    const b = await getLogsAdaptive(client, address, event, mid + 1n, to, args, budget)
     return [...a, ...b]
   }
 }

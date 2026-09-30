@@ -6,12 +6,13 @@ import { activeContract, activeChainId, activeUsdc } from '../lib/adminConfig'
 function activeAddress() { return activeContract() }
 function activeChain() { return activeChainId() }
 
-export function useAllMarkets() {
+export function useAllMarkets(enabled = true) {
   return useReadContract({
     address: activeAddress(),
     abi: PREDARC_ABI,
     functionName: 'getAllMarkets',
     chainId: activeChain(),
+    query: { enabled },
   })
 }
 

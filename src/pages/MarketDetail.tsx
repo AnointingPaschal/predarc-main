@@ -38,7 +38,6 @@ export default function MarketDetail() {
   const market = rawMarket as Market | undefined
   const { data: feeRaw } = usePlatformFee()
   const feeBps = feeRaw !== undefined ? BigInt(feeRaw as bigint) : 200n
-  const { data: allRaw } = useAllMarkets()
   const redeem = useRedeemWinnings()
 
   const [outcome, setOutcome] = useState(0)
@@ -50,6 +49,8 @@ export default function MarketDetail() {
   const [metaLoaded, setMetaLoaded] = useState(false)
   const [news, setNews] = useState<NewsItem[]>([])
 
+  // "More markets" needs the whole list, which is heavy once hundreds of soccer lines exist: skip it there
+  const { data: allRaw } = useAllMarkets(!!market && market.category !== 'Soccer')
   const activity = useMarketActivity(marketId, market?.outcomes.length ?? 0, market?.outcomePools as bigint[] | undefined, market?.totalLiquidity, feeBps)
   const prices = useMemo(() => (market ? pricesFromPools(market.outcomePools) : []), [market])
 

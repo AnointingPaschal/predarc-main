@@ -8,7 +8,7 @@ export default function BtcChart({ points, price, target, windowStart, windowEnd
 }) {
   const W = 720, H = compact ? 120 : 260, PADL = 8, PADR = 64, PADT = 14, PADB = 22
   const view = useMemo(() => {
-    const from = compact || !windowStart ? Date.now() - 15 * 60_000 : windowStart - 60_000
+    const from = compact || !windowStart ? Date.now() - 15 * 60_000 : windowStart - 300_000
     const pts = points.filter(p => p.t >= from)
     if (price != null) pts.push({ t: Date.now(), p: price })
     return pts
@@ -37,6 +37,7 @@ export default function BtcChart({ points, price, target, windowStart, windowEnd
           <text x={W - PADR + 6} y={y(v) + 3} fontSize="10" fill="var(--subtle)">{v.toLocaleString('en-US', { maximumFractionDigits: 0 })}</text>
         </g>
       ))}
+      {!compact && windowStart >= tMin && <rect x={x(windowStart)} y={PADT} width={Math.max(0, x(Math.max(windowEnd, tMax)) - x(windowStart))} height={H - PADT - PADB} fill="#F7931A" opacity="0.05" />}
       {!compact && windowStart >= tMin && <line x1={x(windowStart)} x2={x(windowStart)} y1={PADT} y2={H - PADB} stroke="var(--border)" />}
       {!compact && windowEnd > 0 && <line x1={x(windowEnd)} x2={x(windowEnd)} y1={PADT} y2={H - PADB} stroke="var(--border)" strokeDasharray="4 4" />}
       {target > 0 && (

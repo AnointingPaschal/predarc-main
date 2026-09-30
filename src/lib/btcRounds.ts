@@ -152,6 +152,11 @@ export function useBtcState(user: `0x${string}` | undefined, refetchMs = 4000) {
 export interface PricePoint { t: number; p: number } // ms, USD
 
 export async function fetchSpot(): Promise<number> {
+  try {
+    const r = await fetch('/api/btc-price')
+    const j = await r.json() as { price?: number }
+    if (j.price) return j.price
+  } catch { /* try the exchange directly */ }
   const r = await fetch('https://api.coinbase.com/v2/prices/BTC-USD/spot')
   const j = await r.json() as { data?: { amount?: string } }
   const n = Number(j.data?.amount)
@@ -160,10 +165,14 @@ export async function fetchSpot(): Promise<number> {
 }
 
 export async function fetchCandles(minutes = 60): Promise<PricePoint[]> {
+  try {
+    const r = await fetch(`/api/btc-price?candles=${minutes}`)
+    const j = await r.json() as { points?: PricePoint[] }
+    if (j.points?.length) return j.points
+  } catch { /* try the exchange directly */ }
   const end = Math.floor(Date.now() / 1000), start = end - minutes * 60
   const url = `https://api.exchange.coinbase.com/products/BTC-USD/candles?granularity=60&start=${new Date(start * 1000).toISOString()}&end=${new Date(end * 1000).toISOString()}`
-  const r = await fetch(url)
-  const rows = await r.json() as [number, number, number, number, number, number][]
+  const rows = await (await fetch(url)).json() as [number, number, number, number, number, number][]
   return rows.map(c => ({ t: c[0] * 1000, p: c[4] })).sort((a, b) => a.t - b.t)
 }
 
@@ -190,8 +199,9 @@ export function useLiveBtcPrice(): { price: number | null; points: PricePoint[];
 
     const startPolling = () => {
       if (poll) return
-      poll = setInterval(() => fetchSpot().then(p => { if (!closed) { setLive(true); push(p) } }).catch(() => setLive(false)), 3000)
+      poll = setInterval(() => fetchSpot().then(p => { if (!closed) { setLive(true); push(p) } }).catch(() => { /* keep last price */ }), 2000)
     }
+    startPolling() // the proxy is the reliable baseline; the websocket (if it connects) only makes it smoother
     try {
       ws = new WebSocket('wss://ws-feed.exchange.coinbase.com')
       ws.onopen = () => ws?.send(JSON.stringify({ type: 'subscribe', product_ids: ['BTC-USD'], channels: ['ticker'] }))
@@ -201,8 +211,8 @@ export function useLiveBtcPrice(): { price: number | null; points: PricePoint[];
           if (m.type === 'ticker' && m.price) { setLive(true); push(Number(m.price)) }
         } catch { /* ignore */ }
       }
-      ws.onerror = () => { setLive(false); startPolling() }
-      ws.onclose = () => { if (!closed) { setLive(false); startPolling() } }
+      ws.onerror = () => { /* polling keeps running */ }
+      ws.onclose = () => { /* polling keeps running */ }
     } catch { startPolling() }
     return () => { closed = true; ws?.close(); if (poll) clearInterval(poll) }
   }, [])
@@ -266,13 +276,9 @@ export function useBtcDayStats() {
     refetchInterval: 60_000,
     staleTime: 30_000,
     queryFn: async () => {
-      const end = Math.floor(Date.now() / 1000), start = end - 24 * 3600
-      const url = `https://api.exchange.coinbase.com/products/BTC-USD/candles?granularity=300&start=${new Date(start * 1000).toISOString()}&end=${new Date(end * 1000).toISOString()}`
-      const rows = await (await fetch(url)).json() as [number, number, number, number, number, number][]
-      if (!Array.isArray(rows) || !rows.length) return null
-      const sorted = rows.slice().sort((a, b) => a[0] - b[0])
-      const open = sorted[0][3], close = sorted[sorted.length - 1][4]
-      return { open, change: close - open, changePct: ((close - open) / open) * 100, high: Math.max(...sorted.map(r => r[2])), low: Math.min(...sorted.map(r => r[1])) }
+      const j = await (await fetch('/api/btc-price?stats=1')).json() as Partial<DayStats> & { error?: string }
+      if (j.error || j.open == null) return null
+      return j as DayStats
     },
   })
 }
@@ -313,4 +319,39 @@ export function useBtcClock(state: BtcState | null | undefined) {
   const nowSec = (Date.now() + skew) / 1000
   const curId = Math.floor(nowSec / dur)
   return { nowSec, skew, dur, curId, secLeft: (curId + 1) * dur - nowSec }
+}
+
+// ── Market metrics for the dashboard ─────────────────────────────────────────
+
+export interface BtcMetrics {
+  m1: number | null; m5: number | null; m15: number | null   // % change over the window
+  volBpsMin: number | null                                     // realised volatility, basis points per minute
+  gapBps: number | null                                        // distance to the price to beat, basis points (signed)
+  needPerMin: number | null                                    // USD/minute BTC must move to flip the result (signed toward target)
+  roundHigh: number | null; roundLow: number | null
+}
+
+export function btcMetrics(points: PricePoint[], price: number | null, lock: number, secLeft: number, roundStartMs: number): BtcMetrics {
+  const at = (msAgo: number) => {
+    const t = Date.now() - msAgo
+    let best: PricePoint | undefined
+    for (const p of points) { if (p.t <= t) best = p; else break }
+    return best?.p
+  }
+  const chg = (msAgo: number) => { const o = at(msAgo); return price && o ? ((price - o) / o) * 100 : null }
+  let vol: number | null = null
+  const rec = points.filter(p => Date.now() - p.t < 30 * 60_000)
+  if (rec.length > 8) {
+    const rs: number[] = []
+    for (let i = 1; i < rec.length; i++) { const dt = (rec[i].t - rec[i - 1].t) / 60_000; if (dt > 0) rs.push(Math.log(rec[i].p / rec[i - 1].p) / Math.sqrt(dt)) }
+    if (rs.length > 5) { const mean = rs.reduce((a, b) => a + b, 0) / rs.length; vol = Math.sqrt(rs.reduce((a, b) => a + (b - mean) ** 2, 0) / rs.length) * 1e4 }
+  }
+  const inRound = points.filter(p => p.t >= roundStartMs)
+  return {
+    m1: chg(60_000), m5: chg(5 * 60_000), m15: chg(15 * 60_000), volBpsMin: vol,
+    gapBps: price && lock ? ((price - lock) / lock) * 1e4 : null,
+    needPerMin: price && lock && secLeft > 1 ? (lock - price) / (secLeft / 60) : null,
+    roundHigh: inRound.length ? Math.max(...inRound.map(p => p.p)) : null,
+    roundLow: inRound.length ? Math.min(...inRound.map(p => p.p)) : null,
+  }
 }

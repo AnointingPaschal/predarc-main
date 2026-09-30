@@ -53,7 +53,8 @@ export default function BtcRounds() {
   const diff = price && lockPrice ? price - lockPrice : 0
   const winning = diff >= 0
   const chance = upChance(points, price, lockPrice, secLeft)
-  const finished = useMemo(() => (state?.rounds ?? []).filter(r => r.id < curId && r.status !== RoundStatus.Upcoming).slice().reverse(), [state, curId])
+  // Rounds that never got a price and had no bets (e.g. before the keeper started) are just noise, so hide them
+  const finished = useMemo(() => (state?.rounds ?? []).filter(r => r.id < curId && r.status !== RoundStatus.Upcoming && !(r.status === RoundStatus.Void && !r.lockPrice && r.upTotal + r.downTotal === 0n)).slice().reverse(), [state, curId])
   const settled = finished.filter(r => r.status === RoundStatus.SettledUp || r.status === RoundStatus.SettledDown)
   const upWins = settled.filter(r => r.status === RoundStatus.SettledUp).length
   let streak = 0, streakUp = true
@@ -195,7 +196,7 @@ export default function BtcRounds() {
                   return (
                     <div key={r.id} className="flex items-center gap-2 text-xs rounded-lg px-2 py-1.5" style={{ background: 'var(--surface-muted)' }}>
                       <span className="num" style={{ color: 'var(--muted)' }}>{utcHM(r.id * dur)}</span>
-                      <span className="font-semibold w-12" style={{ color: up ? 'var(--success)' : down ? 'var(--danger)' : 'var(--subtle)' }}>{up ? '▲ Up' : down ? '▼ Down' : r.status === RoundStatus.Void ? 'Refund' : '…'}</span>
+                      <span className="font-semibold w-12" style={{ color: up ? 'var(--success)' : down ? 'var(--danger)' : 'var(--subtle)' }}>{up ? '▲ Up' : down ? '▼ Down' : r.status === RoundStatus.Void ? (r.lockPrice ? 'Refund' : 'No price') : '…'}</span>
                       <span className="num ml-auto" style={{ color: pct == null ? 'var(--subtle)' : pct >= 0 ? 'var(--success)' : 'var(--danger)' }}>{pct == null ? '—' : `${pct >= 0 ? '+' : ''}${pct.toFixed(3)}%`}</span>
                       <span className="num w-14 text-right" style={{ color: 'var(--subtle)' }}>${fmt(pool(r))}</span>
                     </div>

@@ -290,7 +290,28 @@ function parseDrafts(content: string): AIMarketDraft[] {
         : [],
       sourceHeadline: str(raw.sourceHeadline) || undefined,
     }
-  }).filter(m => m.question.length > 0 && m.outcomes.length >= 2)
+  }).filter(m => m.question.length > 0 && m.outcomes.length >= 2).map(normalizeDraft)
+}
+
+/** Coerce a draft into something the contract accepts (Binary = exactly 2 outcomes, Multiple = 2–10 distinct, Scalar = 2 outcomes and high > low). */
+export function normalizeDraft(d: AIMarketDraft): AIMarketDraft {
+  let outcomes = [...new Set(d.outcomes.map(o => o.trim()).filter(Boolean))]
+  let type = d.marketType
+  let low = Number.isFinite(d.scalarLow) ? Math.round(d.scalarLow) : 0
+  let high = Number.isFinite(d.scalarHigh) ? Math.round(d.scalarHigh) : 100
+  if (type === 2) {
+    if (high <= low) { type = 0; outcomes = ['Yes', 'No'] }          // unusable range → plain Yes/No market
+    else outcomes = outcomes.length === 2 ? outcomes : ['Low', 'High']
+  }
+  if (type === 0) {
+    if (outcomes.length > 2) type = 1                                 // too many options for Binary → Multiple choice
+    else if (outcomes.length < 2) outcomes = ['Yes', 'No']
+  }
+  if (type === 1) {
+    if (outcomes.length > 10) outcomes = outcomes.slice(0, 10)
+    if (outcomes.length < 2) { type = 0; outcomes = ['Yes', 'No'] }
+  }
+  return { ...d, marketType: type, outcomes, scalarLow: low, scalarHigh: high, suggestedDurationDays: Math.max(1, d.suggestedDurationDays || 30) }
 }
 
 export async function generateMarkets(opts: AIGenerateOptions): Promise<AIMarketDraft[]> {

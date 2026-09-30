@@ -14,7 +14,7 @@ import { Market, MarketStatus, MarketType, formatUsdc, parseUsdc, CATEGORIES } f
 import { loadConfig, useNetwork, activeSettings, saveConfig, resetConfig, useSiteConfig, isAdminAddress, getAdminSession, signInAsAdmin, DEFAULT_DARK, DEFAULT_LIGHT, CHAIN_IDS, SiteConfig, ThemeColors, NetworkSettings, Network, getActiveContractAddress } from '../lib/adminConfig'
 import { checkContract, type CheckLine } from '../lib/contractCheck'
 import ImagePicker from '../components/ImagePicker'
-import { OPENROUTER_MODELS, testOpenRouterConnection, fetchOpenRouterModels, type ConnectionStep, type OpenRouterModel } from '../lib/aiMarkets'
+import { normalizeDraft, OPENROUTER_MODELS, testOpenRouterConnection, fetchOpenRouterModels, type ConnectionStep, type OpenRouterModel } from '../lib/aiMarkets'
 import AIMarketGenerator from '../components/AIMarketGenerator'
 import type { AIMarketDraft } from '../lib/aiMarkets'
 import { parseOnchainError } from '../lib/errors'
@@ -263,8 +263,10 @@ function AITab() {
     if (chainId !== target) { toast.error(`Switch your wallet to Arc ${network === 'testnet' ? 'Testnet' : 'Mainnet'} first.`); return }
     if (guard.owner && !guard.isOwner) { toast.error(parseOnchainError({ message: 'OwnableUnauthorizedAccount' })); return }
     let published = 0
-    try {
-      for (const draft of drafts) {
+    const failed: string[] = []
+    for (const raw of drafts) {
+      const draft = normalizeDraft(raw)
+      try {
         const endDate = new Date(Date.now() + draft.suggestedDurationDays * 24 * 60 * 60 * 1000)
         const resDate = new Date(endDate.getTime() + 24 * 60 * 60 * 1000)
         const minLiq = Math.max(guard.minLiquidityUsdc ?? 0, activeSettings().minLiquidityUsdc)
@@ -275,8 +277,8 @@ function AITab() {
           outcomes: draft.outcomes,
           endTime: BigInt(Math.floor(endDate.getTime() / 1000)),
           resolutionTime: BigInt(Math.floor(resDate.getTime() / 1000)),
-          scalarLow: BigInt(Math.round(draft.scalarLow)),
-          scalarHigh: BigInt(Math.round(draft.scalarHigh)),
+          scalarLow: BigInt(draft.scalarLow),
+          scalarHigh: BigInt(draft.scalarHigh),
           category: draft.category,
           imageUrl: draft.imageUrl.startsWith('data:') ? '' : draft.imageUrl,
           initialLiquidity: parseUsdc(String(liquidity)),
@@ -287,10 +289,18 @@ function AITab() {
         })
         published++
         toast.success(`Published ${published}/${drafts.length} on ${network}`)
+      } catch (e) {
+        const msg = parseOnchainError(e)
+        // A rejected signature means the admin is stopping; anything else only skips this market.
+        if (/reject|denied|cancel/i.test(msg) || /User rejected/i.test((e as Error)?.message ?? '')) {
+          toast.error(`Stopped after ${published}/${drafts.length}: you rejected the signature`)
+          return
+        }
+        failed.push(draft.question.slice(0, 50))
+        toast.error(`Skipped "${draft.question.slice(0, 40)}…": ${msg}`)
       }
-    } catch (e) {
-      toast.error(`Stopped after ${published}/${drafts.length}: ${parseOnchainError(e)}`)
     }
+    if (failed.length) toast.warning(`${published} published, ${failed.length} skipped`)
   }
 
   return (

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useConfig, useWriteContract, useWaitForTransactionReceipt } from 'wagmi'
-import { waitForTransactionReceipt } from 'wagmi/actions'
+import { waitForTransactionReceipt, simulateContract } from 'wagmi/actions'
 import { erc20Abi, keccak256, toHex } from 'viem'
 import { PREDARC_ABI } from '../lib/contract'
 import { saveMarketMeta, type MarketMeta } from '../lib/api'
@@ -195,10 +195,10 @@ export function useCreateMarketFlow() {
       }
 
       setStep('creating')
-      const hash = await writeContractAsync({
-        address: contract, chainId, abi: PREDARC_ABI, functionName: 'createMarket',
-        args: [p.marketType, p.question, p.outcomes, p.endTime, p.resolutionTime, p.scalarLow, p.scalarHigh, p.category, p.imageUrl, p.initialLiquidity],
-      })
+      const args = [p.marketType, p.question, p.outcomes, p.endTime, p.resolutionTime, p.scalarLow, p.scalarHigh, p.category, p.imageUrl, p.initialLiquidity] as const
+      // Dry-run first: an invalid market is reported here instead of costing a wallet signature and a failed transaction.
+      await simulateContract(wagmiConfig, { address: contract, chainId, abi: PREDARC_ABI, functionName: 'createMarket', args })
+      const hash = await writeContractAsync({ address: contract, chainId, abi: PREDARC_ABI, functionName: 'createMarket', args })
       const receipt = await waitForTransactionReceipt(wagmiConfig, { hash, chainId })
       if (receipt.status !== 'success') throw new Error('Create market transaction reverted onchain.')
       // MarketCreated(uint256 indexed marketId, ...) — the id is topic 1

@@ -155,3 +155,58 @@ export function interpretResult(statusName: string, home: unknown, away: unknown
   if (s === 'STATUS_POSTPONED' || s === 'STATUS_SUSPENDED') return { state: 'manual', reason: 'Postponed or suspended: wait for a new date or cancel the markets.' }
   return { state: 'pending' }
 }
+
+// ── Opening odds: a Poisson goals model fitted to bookmaker prices ────────────────────────────────────
+const pois = (mu: number, max = 12) => { const out = [Math.exp(-mu)]; for (let k = 1; k <= max; k++) out.push(out[k - 1] * mu / k); return out }
+
+function scoreGrid(lh: number, la: number) {
+  const ph = pois(lh), pa = pois(la), grid: number[][] = []
+  let sum = 0
+  for (let h = 0; h < ph.length; h++) { grid[h] = []; for (let a = 0; a < pa.length; a++) { grid[h][a] = ph[h] * pa[a]; sum += grid[h][a] } }
+  for (const row of grid) for (let a = 0; a < row.length; a++) row[a] /= sum
+  return grid
+}
+
+export interface OddsInput { home: number; draw: number; away: number; /** goals line + P(over) if known */ line?: number; over?: number }
+
+/** Fits home/away scoring rates to the 1X2 probabilities (and the totals line if given). */
+export function fitGoals(o: OddsInput): { lh: number; la: number } {
+  const t = o.home + o.draw + o.away
+  const ph = o.home / t, pd = o.draw / t, pa = o.away / t
+  let best = { e: Infinity, lh: 1.4, la: 1.2 }
+  for (let mu = 1.3; mu <= 4.4; mu += 0.05) {
+    for (let lh = 0.15; lh < mu - 0.1; lh += 0.03) {
+      const g = scoreGrid(lh, mu - lh)
+      let h = 0, d = 0, a = 0, over = 0
+      for (let i = 0; i < g.length; i++) for (let j = 0; j < g[i].length; j++) {
+        const p = g[i][j]
+        if (i > j) h += p; else if (i === j) d += p; else a += p
+        if (o.line !== undefined && i + j > o.line) over += p
+      }
+      let e = (h - ph) ** 2 + (d - pd) ** 2 + (a - pa) ** 2
+      if (o.line !== undefined && o.over !== undefined) e += 0.6 * (over - o.over) ** 2
+      if (e < best.e) best = { e, lh, la: mu - lh }
+    }
+  }
+  return { lh: best.lh, la: best.la }
+}
+
+/** Probability (basis points, summing to 10000) of every outcome of every betting line. */
+export function lineProbabilities(o: OddsInput): Record<string, number[]> {
+  const { lh, la } = fitGoals(o)
+  const g = scoreGrid(lh, la)
+  const out: Record<string, number[]> = {}
+  for (const k of KINDS) {
+    const n = k.outcomes('h', 'a').length
+    const p = new Array(n).fill(0)
+    for (let h = 0; h < g.length; h++) for (let a = 0; a < g[h].length; a++) p[k.settle(h, a)] += g[h][a]
+    // keep every outcome tradable and away from the contract's 1%..99% limits
+    const c = p.map(x => Math.min(0.97, Math.max(0.03, x)))
+    const s = c.reduce((x, y) => x + y, 0)
+    const bps = c.map(x => Math.round((x / s) * 10000))
+    bps[bps.indexOf(Math.max(...bps))] += 10000 - bps.reduce((x, y) => x + y, 0)
+    out[k.id] = bps
+  }
+  return out
+}
+export const GENERIC_ODDS: OddsInput = { home: 0.43, draw: 0.27, away: 0.30 }

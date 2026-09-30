@@ -107,3 +107,8 @@ Nothing is generated automatically. In Create / Edit market and on AI drafts, "G
 - Settlement uses the 90-minute score. Extra time/penalties/postponed matches are flagged for manual settlement in the admin tab. Cancelled/abandoned matches cancel their markets (refunds).
 - Auto-settle: `POST /api/sports-keeper?network=…` resolves everything finished. The contract only lets its OWNER resolve, so set the secret `SPORTS_RESOLVER_PRIVATE_KEY` to the owner wallet's key (fund it with a little USDC for gas). Visitors' browsers ping it while on /sports; add a cron ping every 5 min for reliability. Without the key, use Admin → Sports → "Settle now" (signs with the admin wallet).
 - Toggles in Admin → Sports: `sportsEnabled`, `sportsAutoSettle`.
+
+### Opening odds (contract v3)
+- Markets used to open at equal odds (3.00 on 1X2, 2.00 on two-way lines). `PredarcMarket` v3 adds `createMarketWithOdds(..., probsBps[])`: pools are split inversely to probability (sum unchanged), so `getMarketPrice` returns the requested odds. Every other function is untouched. Simulated in the scratchpad `sim7.mjs` (17 checks).
+- Sports tab: for each fixture it calls `/api/sports?action=odds`, which reads ESPN's bookmaker prices (DraftKings/Bet365; moneyline + total), fits a Poisson goals model (`fitGoals`/`lineProbabilities` in `src/lib/sportsCore.ts`) and returns fair probabilities for all 16 betting lines. Without bookmaker odds a generic prior is used. On a v2 contract it falls back to equal odds and says so.
+- To use it: deploy `docs/remix/PredarcMarketRemix.sol` (v3), put the new address in Admin → Config, then generate sports markets. Existing markets keep their odds.

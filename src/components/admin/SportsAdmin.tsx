@@ -13,7 +13,7 @@ import {
   endTimeFor, resolutionTimeFor, type Fixture, type SportsRecord,
 } from '../../lib/sportsCore'
 import {
-  fetchFixtures, fetchRegistry, fetchDue, fetchSportsKeeper, registerFixtures, recordSettled,
+  fetchFixtures, fetchOdds, fetchRegistry, fetchDue, fetchSportsKeeper, registerFixtures, recordSettled,
   type DueMatch, type KeeperStatus,
 } from '../../lib/sports'
 
@@ -95,6 +95,16 @@ export default function SportsAdmin() {
         const r = await waitForTransactionReceipt(wagmi, { hash: h, chainId })
         if (r.status !== 'success') throw new Error('USDC approval reverted')
       }
+      // Opening odds: contract v3 can open a market at chosen probabilities; older ones start at equal odds
+      let version = 1
+      try { version = Number(await readContract(wagmi, { address: contract, chainId, abi: PREDARC_ABI, functionName: 'contractVersion' })) } catch { /* v1 */ }
+      const odds = new Map<string, { source: string; bps: Record<string, number[]> }>()
+      if (version >= 3) {
+        setRunning({ done: 0, total: totalMarkets, label: 'Fetching bookmaker odds…' })
+        for (let i = 0; i < chosen.length; i += 6) {
+          await Promise.all(chosen.slice(i, i + 6).map(async f => { try { odds.set(f.eventId, await fetchOdds(f.league, f.eventId)) } catch { /* equal odds for this one */ } }))
+        }
+      } else toast.warning('This contract opens every market at equal odds. Deploy the v3 contract (docs/remix/PredarcMarketRemix.sol) to open them at real bookmaker odds.', { duration: 12000 })
       let done = 0
       for (const f of chosen) {
         if (stop.current) break
@@ -105,9 +115,12 @@ export default function SportsAdmin() {
           setRunning({ done, total: totalMarkets, label: `${f.home.name} vs ${f.away.name} · ${kind.short}` })
           try {
             const outcomes = outcomesFor(kind, f)
-            const args = [outcomes.length === 2 ? 0 : 1, questionFor(kind, f), outcomes, BigInt(endTimeFor(f)), BigInt(resolutionTimeFor(f)), 0n, 0n, SPORTS_CATEGORY, '', liquidity] as const
-            await simulateContract(wagmi, { address: contract, chainId, abi: PREDARC_ABI, functionName: 'createMarket', args })
-            const hash = await writeContractAsync({ address: contract, chainId, abi: PREDARC_ABI, functionName: 'createMarket', args })
+            const base = [outcomes.length === 2 ? 0 : 1, questionFor(kind, f), outcomes, BigInt(endTimeFor(f)), BigInt(resolutionTimeFor(f)), 0n, 0n, SPORTS_CATEGORY, '', liquidity] as const
+            const probs = odds.get(f.eventId)?.bps[kid]
+            const fn = probs && probs.length === outcomes.length ? 'createMarketWithOdds' : 'createMarket'
+            const args = (fn === 'createMarketWithOdds' ? [...base, probs!.map(BigInt)] : base) as never
+            await simulateContract(wagmi, { address: contract, chainId, abi: PREDARC_ABI, functionName: fn, args } as never)
+            const hash = await writeContractAsync({ address: contract, chainId, abi: PREDARC_ABI, functionName: fn, args } as never)
             const rc = await waitForTransactionReceipt(wagmi, { hash, chainId })
             if (rc.status !== 'success') throw new Error('reverted')
             const log = rc.logs.find(l => l.address.toLowerCase() === contract.toLowerCase() && l.topics[0] === CREATED)

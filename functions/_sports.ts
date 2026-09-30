@@ -1,5 +1,5 @@
 // Soccer data (ESPN's public scoreboard) and the settlement plan for registered fixtures.
-import { KIND_BY_ID, interpretResult, type Fixture, type SportsRecord } from '../src/lib/sportsCore'
+import { KIND_BY_ID, interpretResult, lineProbabilities, GENERIC_ODDS, type Fixture, type SportsRecord, type OddsInput } from '../src/lib/sportsCore'
 import type { Env } from './_lib'
 
 // ESPN's "site" API answers 403 to cloud servers, but the "core" API is open. Its list endpoints return $ref links,
@@ -86,6 +86,34 @@ export async function matchResult(r: Pick<SportsRecord, 'league' | 'eventId' | '
   ])
   const num = (x: { value?: number; displayValue?: string } | null) => (x ? (x.value ?? x.displayValue ?? '') : '')
   return interpretResult(st?.type?.name ?? '', num(hs), num(as))
+}
+
+// ── Bookmaker odds (ESPN lists DraftKings / Bet365 prices) → opening probabilities for every betting line ──
+type Side = { moneyLine?: number; value?: number; current?: { moneyLine?: number; american?: string }; odds?: { value?: number } } | undefined
+const american = (ml: number) => (ml > 0 ? 1 + ml / 100 : ml < 0 ? 1 + 100 / -ml : 0)
+function decimal(o: Side): number {
+  if (!o) return 0
+  const ml = o.current?.moneyLine ?? o.moneyLine
+  if (typeof ml === 'number' && ml !== 0) return american(ml)
+  const am = Number(o.current?.american)
+  if (Number.isFinite(am) && am !== 0) return american(am)
+  const v = o.odds?.value ?? o.value
+  return typeof v === 'number' && v > 1 ? v : 0
+}
+interface OddsItem { provider?: { name?: string }; overUnder?: number; overOdds?: number; underOdds?: number; homeTeamOdds?: Side; awayTeamOdds?: Side; drawOdds?: Side }
+
+export async function openingOdds(league: string, eventId: string): Promise<{ source: string; bps: Record<string, number[]> }> {
+  const data = await getJson<{ items?: OddsItem[] }>(`${CORE}/${league}/events/${eventId}/competitions/${eventId}/odds`)
+  for (const it of data?.items ?? []) {
+    const h = decimal(it.homeTeamOdds), d = decimal(it.drawOdds), a = decimal(it.awayTeamOdds)
+    if (h > 1 && d > 1 && a > 1) {
+      const input: OddsInput = { home: 1 / h, draw: 1 / d, away: 1 / a }
+      const ov = typeof it.overOdds === 'number' ? american(it.overOdds) : 0, un = typeof it.underOdds === 'number' ? american(it.underOdds) : 0
+      if (typeof it.overUnder === 'number' && ov > 1 && un > 1) { input.line = it.overUnder; input.over = (1 / ov) / (1 / ov + 1 / un) }
+      return { source: it.provider?.name ?? 'bookmaker', bps: lineProbabilities(input) }
+    }
+  }
+  return { source: 'generic', bps: lineProbabilities(GENERIC_ODDS) }
 }
 
 // ── Registry of generated fixtures (KV) ──────────────────────────────────────

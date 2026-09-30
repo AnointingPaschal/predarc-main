@@ -151,6 +151,74 @@ contract PredarcMarket is Ownable, ReentrancyGuard {
         string calldata imageUrl,
         uint256 initialLiquidity
     ) external onlyOwner nonReentrant returns (uint256 marketId) {
+        return _create(marketType, question, outcomes, endTime, resolutionTime, scalarLow, scalarHigh, category, imageUrl, initialLiquidity, new uint256[](0));
+    }
+
+    /// @notice Like createMarket, but the market opens at the given probabilities (basis points, one per outcome,
+    ///         summing to ~10000) instead of equal odds. Pools are split inversely to probability, so the total
+    ///         liquidity is unchanged and getMarketPrice() returns the requested odds.
+    function createMarketWithOdds(
+        MarketType marketType,
+        string calldata question,
+        string[] calldata outcomes,
+        uint256 endTime,
+        uint256 resolutionTime,
+        int256 scalarLow,
+        int256 scalarHigh,
+        string calldata category,
+        string calldata imageUrl,
+        uint256 initialLiquidity,
+        uint256[] calldata probsBps
+    ) external onlyOwner nonReentrant returns (uint256 marketId) {
+        return _create(marketType, question, outcomes, endTime, resolutionTime, scalarLow, scalarHigh, category, imageUrl, initialLiquidity, probsBps);
+    }
+
+    function _initialPools(uint256 n, uint256 liquidity, uint256[] memory probsBps) internal pure returns (uint256[] memory pools) {
+        pools = new uint256[](n);
+        if (probsBps.length == 0) {
+            uint256 basePool = liquidity / n;
+            uint256 remainder = liquidity - (basePool * n);
+            for (uint256 i = 0; i < n; i++) {
+                pools[i] = basePool;
+                if (remainder > 0) { pools[i] += 1; remainder -= 1; }
+            }
+            return pools;
+        }
+        if (probsBps.length != n) revert InvalidOutcome();
+        uint256 sumP;
+        uint256 sumW;
+        uint256[] memory w = new uint256[](n);
+        for (uint256 i = 0; i < n; i++) {
+            uint256 p = probsBps[i];
+            if (p < 100 || p > 9900) revert InvalidOutcome();
+            sumP += p;
+            w[i] = 1e24 / p;
+            sumW += w[i];
+        }
+        if (sumP < 9950 || sumP > 10050) revert InvalidOutcome();
+        uint256 used;
+        uint256 largest;
+        for (uint256 i = 0; i < n; i++) {
+            pools[i] = (liquidity * w[i]) / sumW;
+            used += pools[i];
+            if (pools[i] > pools[largest]) largest = i;
+        }
+        pools[largest] += liquidity - used; // rounding dust, keeps sum(pools) == liquidity
+    }
+
+    function _create(
+        MarketType marketType,
+        string calldata question,
+        string[] calldata outcomes,
+        uint256 endTime,
+        uint256 resolutionTime,
+        int256 scalarLow,
+        int256 scalarHigh,
+        string calldata category,
+        string calldata imageUrl,
+        uint256 initialLiquidity,
+        uint256[] memory probsBps
+    ) internal returns (uint256 marketId) {
         if (endTime <= block.timestamp + MIN_MARKET_DURATION || resolutionTime < endTime) {
             revert InvalidTimes();
         }
@@ -188,17 +256,10 @@ contract PredarcMarket is Ownable, ReentrancyGuard {
         m.category = category;
         m.imageUrl = imageUrl;
 
-        uint256 basePool = initialLiquidity / outcomeCount;
-        uint256 remainder = initialLiquidity - (basePool * outcomeCount);
-
+        uint256[] memory pools = _initialPools(outcomeCount, initialLiquidity, probsBps);
         for (uint256 i = 0; i < outcomeCount; i++) {
             m.outcomes.push(outcomes[i]);
-            uint256 poolAmount = basePool;
-            if (remainder > 0) {
-                poolAmount += 1;
-                remainder -= 1;
-            }
-            m.outcomePools.push(poolAmount);
+            m.outcomePools.push(pools[i]);
         }
 
         emit MarketCreated(marketId, marketType, question, endTime);
@@ -386,9 +447,9 @@ contract PredarcMarket is Ownable, ReentrancyGuard {
         return _commentRefs[commentId].author;
     }
 
-    /// @notice Feature level of this deployment: 2 = free creation, market editing, onchain comments.
+    /// @notice Feature level of this deployment: 2 = free creation, market editing, onchain comments; 3 = createMarketWithOdds.
     function contractVersion() external pure returns (uint256) {
-        return 2;
+        return 3;
     }
 
     function setMinLiquidity(uint256 amount) external onlyOwner {

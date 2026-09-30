@@ -6,7 +6,7 @@
 //   POST /api/sports { action:'register', network, records }  admin: remember freshly created markets
 //   POST /api/sports { action:'settled',  network, marks }    admin: record settled markets
 import { json, requireAdmin, checkStorage, isNetwork, isMarketId, type Env } from '../_lib'
-import { probes, upcomingFixtures, loadRegistry, saveRegistry, computeDue, markSettled, isLeagueSlug } from '../_sports'
+import { probes, openingOdds, upcomingFixtures, loadRegistry, saveRegistry, computeDue, markSettled, isLeagueSlug } from '../_sports'
 import { LEAGUES, KIND_BY_ID, type SportsRecord } from '../../src/lib/sportsCore'
 
 const clip = (v: unknown, n: number) => String(v ?? '').slice(0, n)
@@ -15,6 +15,11 @@ const cleanTeam = (t: unknown) => { const o = (t && typeof t === 'object' ? t : 
 export const onRequestGet = async ({ request, env }: { request: Request; env: Env }): Promise<Response> => {
   const url = new URL(request.url); const action = url.searchParams.get('action')
   if (action === 'leagues') return json({ leagues: LEAGUES })
+  if (action === 'odds') {
+    const league = url.searchParams.get('league'), event = url.searchParams.get('event') ?? ''
+    if (!isLeagueSlug(league) || !/^\d{1,12}$/.test(event)) return json({ error: 'league and event required' }, 400)
+    return json(await openingOdds(league, event))
+  }
   if (action === 'fixtures') {
     const league = url.searchParams.get('league')
     if (!isLeagueSlug(league)) return json({ error: 'league required' }, 400)

@@ -15,6 +15,21 @@ const cleanTeam = (t: unknown) => { const o = (t && typeof t === 'object' ? t : 
 export const onRequestGet = async ({ request, env }: { request: Request; env: Env }): Promise<Response> => {
   const url = new URL(request.url); const action = url.searchParams.get('action')
   if (action === 'leagues') return json({ leagues: LEAGUES })
+  if (action === 'probe') {
+    const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36'
+    const urls = [
+      'https://site.web.api.espn.com/apis/v2/sports/soccer/eng.1/scoreboard?dates=20261017',
+      'https://sports.core.api.espn.com/v2/sports/soccer/leagues/eng.1/events?dates=20261017',
+      'https://cdn.espn.com/core/soccer/scoreboard?xhr=1&league=eng.1&dates=20261017',
+      'https://site.api.espn.com/apis/site/v2/sports/soccer/eng.1/scoreboard?dates=20261017',
+      'https://www.thesportsdb.com/api/v1/json/3/eventsday.php?d=2026-10-17&s=Soccer',
+      'https://www.thesportsdb.com/api/v1/json/3/eventsnextleague.php?id=4328',
+    ]
+    const out = await Promise.all(urls.map(async u => {
+      try { const r = await fetch(u, { headers: { 'user-agent': UA, accept: 'application/json' } }); const t = await r.text(); return `${r.status} ${u} :: ${t.slice(0, 80).replace(/\s+/g, ' ')}` } catch (e) { return `ERR ${u} ${(e as Error).message}` }
+    }))
+    return json({ out })
+  }
   if (action === 'fixtures') {
     const league = url.searchParams.get('league')
     if (!isLeagueSlug(league)) return json({ error: 'league required' }, 400)

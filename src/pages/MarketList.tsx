@@ -121,7 +121,7 @@ export default function MarketList() {
             <Link to="/sports" className="inline-flex items-center gap-1 text-xs font-semibold hover:opacity-80" style={{ color: 'var(--accent)' }}>All matches <ArrowRight size={12} /></Link>
           </div>
           <div className="flex gap-4 overflow-x-auto pb-3 -mx-1 px-1 snap-x">
-            {upcoming.slice(0, 10).map(r => <div key={r.eventId} className="w-[300px] sm:w-[340px] shrink-0 snap-start"><MatchCard r={r} byId={byId} compact /></div>)}
+            {upcoming.slice(0, 10).map(r => <div key={r.eventId} className="w-[300px] sm:w-[330px] shrink-0 snap-start"><MatchCard r={r} byId={byId} compact /></div>)}
           </div>
         </section>
       )}

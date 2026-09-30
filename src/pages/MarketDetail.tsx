@@ -109,7 +109,7 @@ export default function MarketDetail() {
   }
 
   return (
-    <div className="max-w-6xl mx-auto px-4 sm:px-6 py-6">
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6">
       <Link to="/" className="flex items-center gap-2 text-sm mb-4 hover:opacity-80" style={{ color: 'var(--subtle)' }}><ArrowLeft size={14} />All Markets</Link>
 
       <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_360px] gap-5">

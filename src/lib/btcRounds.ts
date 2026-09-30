@@ -2,7 +2,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { usePublicClient } from 'wagmi'
-import { parseAbi } from 'viem'
+import { parseAbi, parseAbiItem } from 'viem'
+import { getLogsAdaptive } from './marketHistory'
 import { activeChainId, activeSettings, loadConfig, useSiteConfig, useNetwork, getNetworkSettings } from './adminConfig'
 
 export const BTC_ROUNDS_ABI = parseAbi([
@@ -218,3 +219,98 @@ export async function pingKeeper(network: string): Promise<void> {
 
 export const usd = (n: number) => n.toLocaleString('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 })
 export { loadConfig }
+
+// ── Shared UTC time (everyone sees the same clock, whatever their timezone) ──
+
+const p2 = (n: number) => String(n).padStart(2, '0')
+/** "14:35" in UTC from unix seconds. */
+export const utcHM = (sec: number) => { const d = new Date(sec * 1000); return `${p2(d.getUTCHours())}:${p2(d.getUTCMinutes())}` }
+/** "14:35:07 UTC" from unix seconds. */
+export const utcHMS = (sec: number) => { const d = new Date(sec * 1000); return `${p2(d.getUTCHours())}:${p2(d.getUTCMinutes())}:${p2(d.getUTCSeconds())} UTC` }
+export const utcRange = (startSec: number, dur: number) => `${utcHM(startSec)}–${utcHM(startSec + dur)} UTC`
+
+// ── Probability model ────────────────────────────────────────────────────────
+
+const erf = (x: number) => {
+  const t = 1 / (1 + 0.3275911 * Math.abs(x))
+  const y = 1 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-x * x)
+  return x >= 0 ? y : -y
+}
+const cdf = (z: number) => 0.5 * (1 + erf(z / Math.SQRT2))
+
+/** Chance (0..1) that BTC finishes the round above the price to beat, from the gap, recent volatility and time left. */
+export function upChance(points: PricePoint[], price: number | null, lock: number, secLeft: number): number | null {
+  if (!price || !lock) return null
+  const recent = points.filter(p => Date.now() - p.t < 20 * 60 * 1000)
+  if (recent.length < 10) return price >= lock ? 0.6 : 0.4
+  // per-second variance from the recent sample
+  let sum = 0, n = 0
+  for (let i = 1; i < recent.length; i++) {
+    const dt = Math.max(1, (recent[i].t - recent[i - 1].t) / 1000)
+    const r = Math.log(recent[i].p / recent[i - 1].p)
+    sum += (r * r) / dt; n++
+  }
+  const sigma = Math.sqrt(sum / Math.max(1, n)) // per sqrt-second
+  const sd = Math.max(sigma * Math.sqrt(Math.max(secLeft, 1)), 1e-6)
+  const z = Math.log(price / lock) / sd
+  return Math.min(0.99, Math.max(0.01, cdf(z)))
+}
+
+// ── 24h stats ────────────────────────────────────────────────────────────────
+
+export interface DayStats { change: number; changePct: number; high: number; low: number; open: number }
+
+export function useBtcDayStats() {
+  return useQuery<DayStats | null>({
+    queryKey: ['btc-24h'],
+    refetchInterval: 60_000,
+    staleTime: 30_000,
+    queryFn: async () => {
+      const end = Math.floor(Date.now() / 1000), start = end - 24 * 3600
+      const url = `https://api.exchange.coinbase.com/products/BTC-USD/candles?granularity=300&start=${new Date(start * 1000).toISOString()}&end=${new Date(end * 1000).toISOString()}`
+      const rows = await (await fetch(url)).json() as [number, number, number, number, number, number][]
+      if (!Array.isArray(rows) || !rows.length) return null
+      const sorted = rows.slice().sort((a, b) => a[0] - b[0])
+      const open = sorted[0][3], close = sorted[sorted.length - 1][4]
+      return { open, change: close - open, changePct: ((close - open) / open) * 100, high: Math.max(...sorted.map(r => r[2])), low: Math.min(...sorted.map(r => r[1])) }
+    },
+  })
+}
+
+// ── Recent bets feed ─────────────────────────────────────────────────────────
+
+const BET_EVENT = parseAbiItem('event RoundBet(uint256 indexed roundId, address indexed user, bool up, uint256 amount)')
+export interface BetLog { roundId: number; user: string; up: boolean; amount: bigint; block: bigint; index: number }
+
+export function useBtcBets(refetchMs = 8000) {
+  const client = usePublicClient({ chainId: activeChainId() })
+  const addr = btcRoundsAddress()
+  return useQuery<BetLog[]>({
+    queryKey: ['btc-bets', activeChainId(), addr],
+    enabled: !!client && /^0x[0-9a-fA-F]{40}$/.test(addr),
+    refetchInterval: refetchMs,
+    staleTime: 4000,
+    queryFn: async () => {
+      if (!client) return []
+      const latest = await client.getBlockNumber()
+      const from = latest > 40000n ? latest - 40000n : 0n
+      const logs = await getLogsAdaptive(client as never, addr as `0x${string}`, BET_EVENT as never, from, latest)
+      return logs.map(l => {
+        const a = (l as unknown as { args: { roundId: bigint; user: string; up: boolean; amount: bigint }; blockNumber: bigint; logIndex: number })
+        return { roundId: Number(a.args.roundId), user: a.args.user, up: a.args.up, amount: a.args.amount, block: a.blockNumber, index: a.logIndex }
+      }).sort((x, y) => (x.block === y.block ? y.index - x.index : x.block < y.block ? 1 : -1)).slice(0, 40)
+    },
+  })
+}
+
+/** Chain-synchronised clock: identical for every visitor. Ticks every 500ms. */
+export function useBtcClock(state: BtcState | null | undefined) {
+  const [, setT] = useState(0)
+  const [skew, setSkew] = useState(0)
+  useEffect(() => { const i = setInterval(() => setT(t => t + 1), 500); return () => clearInterval(i) }, [])
+  useEffect(() => { if (state) setSkew(state.chainNow * 1000 - Date.now()) }, [state?.chainNow]) // eslint-disable-line react-hooks/exhaustive-deps
+  const dur = state?.duration ?? 300
+  const nowSec = (Date.now() + skew) / 1000
+  const curId = Math.floor(nowSec / dur)
+  return { nowSec, skew, dur, curId, secLeft: (curId + 1) * dur - nowSec }
+}

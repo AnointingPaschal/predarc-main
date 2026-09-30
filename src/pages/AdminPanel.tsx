@@ -18,6 +18,7 @@ import { normalizeDraft, OPENROUTER_MODELS, testOpenRouterConnection, fetchOpenR
 import AIMarketGenerator from '../components/AIMarketGenerator'
 import type { AIMarketDraft } from '../lib/aiMarkets'
 import { parseOnchainError } from '../lib/errors'
+import { requestMarketImage } from '../lib/api'
 
 function activeAddress() { return getActiveContractAddress(loadConfig()) as `0x${string}` }
 
@@ -257,6 +258,20 @@ function AITab() {
   const { chainId } = useAccount()
   const network = useNetwork()
 
+  const { data: allMk } = useAllMarkets()
+  const [regen, setRegen] = useState<string | null>(null)
+  const regenerateImages = async () => {
+    const list = ((allMk as unknown as Market[] | undefined) ?? []).filter(m => !m.imageUrl || m.imageUrl.startsWith('data:'))
+    if (!list.length) { toast.info('Every market already has an on-chain image.'); return }
+    let done = 0, failed = 0
+    for (const m of list) {
+      setRegen(`Regenerating ${done + failed + 1}/${list.length}…`)
+      try { const r = await requestMarketImage(m.id, { force: true }); if (r.imageUrl) done++; else failed++ } catch { failed++ }
+    }
+    setRegen(null)
+    toast[failed ? 'warning' : 'success'](`Covers regenerated: ${done} ok${failed ? `, ${failed} failed (see Config → AI)` : ''}`)
+  }
+
   const publishDrafts = async (drafts: AIMarketDraft[]) => {
     const target = CHAIN_IDS[network]
     if (!activeAddress()) { toast.error(`No ${network} contract set. Add it in Config.`); return }
@@ -310,6 +325,10 @@ function AITab() {
         <p className="text-xs" style={{ color: 'var(--subtle)' }}>
           Generate markets from a topic, news, or auto-pick. Markets publish to the network you are viewing (<strong>{network === 'testnet' ? 'Arc Testnet' : 'Arc Mainnet'}</strong>). Click <strong>Publish All</strong> to deploy all drafts onchain, or <strong>Use</strong> per-market to load into the Create form.
         </p>
+      </div>
+      <div className="rounded-xl p-4 flex items-center gap-3 flex-wrap" style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}>
+        <div className="min-w-0 flex-1"><p className="text-sm font-semibold" style={{ color: 'var(--ink)' }}>Market cover images</p><p className="text-xs" style={{ color: 'var(--subtle)' }}>Covers are generated automatically for markets without an image. Use this to redo all of them (uses your image model credit).</p></div>
+        <button onClick={regenerateImages} disabled={!!regen} className="px-3 py-2 rounded-lg text-sm font-semibold disabled:opacity-50" style={{ background: 'var(--accent)', color: '#0d1b2f' }}>{regen ?? 'Regenerate all covers'}</button>
       </div>
       <AIMarketGenerator
         onUseMarket={d => toast.info('Use the Create tab to deploy: ' + d.question.slice(0, 40))}
@@ -1009,10 +1028,14 @@ function ConfigTab() {
             <input type="checkbox" className="mt-0.5" checked={config.openrouterWebSearch} onChange={e => setConfig(c => ({ ...c, openrouterWebSearch: e.target.checked }))} />
             <span><strong style={{ color: 'var(--ink)' }}>Web search (online)</strong> — lets the model look things up live when generating markets and insights. Works with free models too, but OpenRouter bills the search itself, so the account needs a little credit.</span>
           </label>
-          <Field label="Image model for market covers (blank = draw SVG covers with the model above)">
+          <Field label="Image model for market covers">
             <input value={config.openrouterImageModel} onChange={e => setConfig(c => ({ ...c, openrouterImageModel: e.target.value.trim() }))} placeholder="google/gemini-2.5-flash-image" className={inputCls + ' mono'} />
-            <p className="text-[11px] mt-1" style={{ color: 'var(--subtle)' }}>Markets without an image get one automatically. Image models cost a little credit per picture; if it fails or is blank, the normal (free) model draws a simple illustration instead.</p>
+            <p className="text-[11px] mt-1" style={{ color: 'var(--subtle)' }}>Markets without an image get one automatically. Your AI first writes a picture brief from the question (its countries, teams, coins…), then this model paints exactly that. Image models cost a little credit per picture.</p>
           </Field>
+          <label className="flex items-start gap-2 text-xs cursor-pointer" style={{ color: 'var(--muted)' }}>
+            <input type="checkbox" className="mt-0.5" checked={config.aiImageSvgFallback} onChange={e => setConfig(c => ({ ...c, aiImageSvgFallback: e.target.checked }))} />
+            <span>If the image model fails, let the text model draw a simple SVG cover. Off = no image rather than a vague one.</span>
+          </label>
           <Field label="Initial liquidity for AI-published markets (USDC, 0 = free)">
             <input type="number" min={0} step={1} value={config.aiInitialLiquidityUsdc} onChange={e => setConfig(c => ({ ...c, aiInitialLiquidityUsdc: Math.max(0, parseFloat(e.target.value) || 0) }))} className={inputCls + ' tabular-nums'} />
             <p className="text-[11px] mt-1" style={{ color: 'var(--subtle)' }}>A market with 0 liquidity is created for free but can't be traded until you fund it (Fund market box on its page).</p>

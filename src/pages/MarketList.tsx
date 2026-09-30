@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react'
 import { Search, TrendingUp, Zap, BarChart2, Activity } from 'lucide-react'
 import MarketCard from '../components/MarketCard'
+import HeroPredictions from '../components/HeroPredictions'
 import { useMarketImages } from '../hooks/useMarketImages'
 import { BtcCard, BtcResultsCard } from '../components/BtcPromo'
 import { useAllMarkets } from '../hooks/useMarkets'
@@ -54,23 +55,7 @@ export default function MarketList() {
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8">
 
-      {/* Hero */}
-      <div className="mb-8">
-        <div className="flex items-center gap-2 mb-3">
-          <span
-            className="text-xs font-semibold tracking-widest uppercase px-2 py-1 rounded-lg"
-            style={{ background: 'var(--accent-bg)', color: 'var(--accent)' }}
-          >
-            Live on Arc
-          </span>
-        </div>
-        <h1 className="display text-3xl sm:text-4xl font-700 mb-2 text-balance" style={{ color: 'var(--ink)' }}>
-          Predict the Future.
-        </h1>
-        <p className="text-sm max-w-xl text-pretty" style={{ color: 'var(--muted)' }}>
-          Trade outcome shares with USDC. Markets resolve automatically or via admin — transparent, onchain, instant.
-        </p>
-      </div>
+      <HeroPredictions markets={allMarkets} images={images} />
 
       <div className="xl:grid xl:grid-cols-[minmax(0,1fr)_300px] xl:gap-6 items-start">
         <div className="min-w-0">
@@ -186,7 +171,7 @@ export default function MarketList() {
               {filtered.length} market{filtered.length !== 1 ? 's' : ''}
             </p>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 gap-3">
             <BtcCard />
             {filtered.map(m => <MarketCard key={m.id.toString()} market={m} image={images[m.id.toString()]} />)}
           </div>

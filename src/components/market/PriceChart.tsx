@@ -11,6 +11,7 @@ interface Props {
   selected: number | null        // highlighted outcome (null = all)
   onSelect?: (i: number) => void
   live?: boolean
+  height?: number
 }
 
 const RANGES = [
@@ -20,13 +21,13 @@ const RANGES = [
 
 interface Pt { t: number; p: number[] }
 
-export default function PriceChart({ outcomes, snapshots, times, livePrices, createdTs, selected, onSelect, live }: Props) {
+export default function PriceChart({ outcomes, snapshots, times, livePrices, createdTs, selected, onSelect, live, height }: Props) {
   const [range, setRange] = useState<(typeof RANGES)[number]['key']>('ALL')
   const [hover, setHover] = useState<number | null>(null)
   const wrap = useRef<HTMLDivElement>(null)
   const [w, setW] = useState(700)
   const [now, setNow] = useState(() => Math.floor(Date.now() / 1000))
-  const H = 300, PL = 8, PR = 44, PT = 14, PB = 26
+  const H = height ?? 300, PL = 8, PR = 44, PT = 14, PB = 26
 
   useEffect(() => {
     const el = wrap.current; if (!el) return

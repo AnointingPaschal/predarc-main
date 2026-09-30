@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Clock, TrendingUp, ArrowUpRight, CheckCircle2, XCircle, Minus } from 'lucide-react'
+import { Clock, TrendingUp, CheckCircle2, XCircle, Minus } from 'lucide-react'
 import { Market, MarketStatus, MarketType, timeUntil, formatUsdc, getMarketPrice } from '../lib/contract'
 
 interface MarketCardProps {
@@ -21,30 +21,29 @@ const CATEGORY_COLORS: Record<string, string> = {
   Other: 'var(--muted)',
 }
 
-const PALETTE = ['#3b82f6', '#f43f5e', '#f59e0b', '#a855f7', '#14b8a6', '#ec4899', '#84cc16', '#06b6d4', '#f97316', '#8b5cf6']
-const YES = '#22c55e', NO = '#ef4444'
-/** Consistent colour per outcome: Yes green, No red, everything else from the palette. */
+// Option colours come from the site theme (Branding tab), so they follow any palette you set.
+const PALETTE = ['var(--accent)', 'var(--warning)', 'var(--success)', 'var(--danger)', 'var(--muted)', 'color-mix(in srgb, var(--accent) 55%, var(--danger))', 'color-mix(in srgb, var(--success) 55%, var(--accent))', 'color-mix(in srgb, var(--warning) 55%, var(--danger))']
+/** Consistent colour per outcome: Yes = theme success, No = theme danger, others cycle through theme colours. */
 export function outcomeColor(name: string, i: number, total: number): string {
-  if (/^yes$/i.test(name.trim())) return YES
-  if (/^no$/i.test(name.trim())) return NO
-  if (total === 2) return i === 0 ? PALETTE[0] : PALETTE[1]
+  if (/^yes$/i.test(name.trim())) return 'var(--success)'
+  if (/^no$/i.test(name.trim())) return 'var(--danger)'
+  if (total === 2) return i === 0 ? 'var(--accent)' : 'var(--warning)'
   return PALETTE[i % PALETTE.length]
 }
 
 function Cover({ src, category, catColor }: { src?: string; category: string; catColor: string }) {
   const [bad, setBad] = useState(false)
   if (src && !bad) {
-    return <img src={src} alt="" loading="lazy" onError={() => setBad(true)} className="w-11 h-11 rounded-xl object-cover flex-shrink-0" style={{ border: '1px solid var(--border)' }} />
+    return <img src={src} alt="" loading="lazy" onError={() => setBad(true)} className="w-9 h-9 rounded-lg object-cover flex-shrink-0" style={{ border: '1px solid var(--border)' }} />
   }
   return (
-    <div className="w-11 h-11 rounded-xl flex-shrink-0 flex items-center justify-center text-sm font-bold" style={{ background: `color-mix(in srgb, ${catColor} 18%, var(--surface-muted))`, color: catColor }}>
+    <div className="w-9 h-9 rounded-lg flex-shrink-0 flex items-center justify-center text-xs font-bold" style={{ background: `color-mix(in srgb, ${catColor} 18%, var(--surface-muted))`, color: catColor }}>
       {(category || 'M').slice(0, 1).toUpperCase()}
     </div>
   )
 }
 
 export default function MarketCard({ market, featured: _featured, image }: MarketCardProps) {
-  const isOpen = market.status === MarketStatus.Open
   const isResolved = market.status === MarketStatus.Resolved
   const isCancelled = market.status === MarketStatus.Cancelled
   const catColor = CATEGORY_COLORS[market.category] ?? 'var(--muted)'
@@ -55,21 +54,20 @@ export default function MarketCard({ market, featured: _featured, image }: Marke
       className="group flex flex-col rounded-2xl overflow-hidden theme-transition hover:-translate-y-0.5 transition"
       style={{ background: 'var(--surface)', border: '1px solid var(--border)', boxShadow: 'var(--card-shadow)', backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)' }}
     >
-      <div className="p-4 flex flex-col gap-3 flex-1">
-        <div className="flex items-start gap-3">
+      <div className="p-3 flex flex-col gap-2 flex-1">
+        <div className="flex items-start gap-2.5">
           <Cover src={image} category={market.category} catColor={catColor} />
-          <p className="text-[15px] font-semibold leading-snug text-pretty line-clamp-3 flex-1" style={{ color: 'var(--ink)' }}>{market.question}</p>
+          <p className="text-[13px] font-semibold leading-snug text-pretty line-clamp-2 flex-1" style={{ color: 'var(--ink)' }}>{market.question}</p>
           {market.marketType === MarketType.Binary && !isCancelled && <ChanceRing market={market} />}
         </div>
 
         {market.marketType === MarketType.Scalar ? <ScalarPreview market={market} /> : <OutcomesPreview market={market} />}
 
-        <div className="flex items-center gap-2 mt-auto pt-2 text-[11px] flex-wrap" style={{ color: 'var(--subtle)', borderTop: '1px solid var(--border)' }}>
+        <div className="flex items-center gap-1.5 mt-auto pt-2 text-[10px] flex-nowrap overflow-hidden whitespace-nowrap" style={{ color: 'var(--subtle)', borderTop: '1px solid var(--border)' }}>
           <span className="pill" style={{ background: `color-mix(in srgb, ${catColor} 14%, transparent)`, color: catColor }}>{market.category || 'General'}</span>
           <StatusBadge status={market.status} />
           <span className="flex items-center gap-1 num"><Clock size={10} />{isResolved ? 'Resolved' : isCancelled ? 'Cancelled' : timeUntil(market.endTime)}</span>
           <span className="ml-auto flex items-center gap-1 num"><TrendingUp size={10} /><span style={{ color: 'var(--muted)', fontWeight: 600 }}>${formatUsdc(market.totalLiquidity)}</span></span>
-          {isOpen && <ArrowUpRight size={13} className="opacity-0 group-hover:opacity-100 transition-opacity" style={{ color: 'var(--accent)' }} />}
         </div>
       </div>
     </Link>
@@ -93,8 +91,8 @@ function ChanceRing({ market }: { market: Market }) {
   const col = outcomeColor(market.outcomes[0] ?? '', 0, 2)
   const r = 17, c = 2 * Math.PI * r
   return (
-    <div className="flex-shrink-0 text-center" style={{ width: 46 }}>
-      <svg width="46" height="46" viewBox="0 0 46 46" style={{ display: 'block' }}>
+    <div className="flex-shrink-0 text-center" style={{ width: 36 }}>
+      <svg width="36" height="36" viewBox="0 0 46 46" style={{ display: 'block' }}>
         <circle cx="23" cy="23" r={r} fill="none" stroke="var(--border)" strokeWidth="4" />
         <circle cx="23" cy="23" r={r} fill="none" stroke={col} strokeWidth="4" strokeLinecap="round" strokeDasharray={c} strokeDashoffset={c * (1 - pct / 100)} transform="rotate(-90 23 23)" />
         <text x="23" y="27" textAnchor="middle" fontSize="12" fontWeight="700" fill="var(--ink)">{pct}%</text>
@@ -116,9 +114,9 @@ function OutcomesPreview({ market }: { market: Market }) {
         {rows.map(r => {
           const won = resolved && market.resolvedOutcome === BigInt(r.i)
           return (
-            <div key={r.i} className="rounded-xl px-3 py-2.5 flex items-center justify-between gap-2 min-w-0" style={{ background: `color-mix(in srgb, ${r.color} ${won ? 28 : 14}%, transparent)`, border: `1px solid color-mix(in srgb, ${r.color} ${won ? 60 : 25}%, transparent)` }}>
-              <span className="text-sm font-semibold truncate" style={{ color: r.color }}>{r.name}</span>
-              <span className="text-sm font-bold num flex-shrink-0" style={{ color: r.color }}>{Math.round(r.pct)}¢</span>
+            <div key={r.i} className="rounded-lg px-2.5 py-1.5 flex items-center justify-between gap-2 min-w-0" style={{ background: `color-mix(in srgb, ${r.color} ${won ? 28 : 14}%, transparent)`, border: `1px solid color-mix(in srgb, ${r.color} ${won ? 60 : 25}%, transparent)` }}>
+              <span className="text-xs font-semibold truncate" style={{ color: r.color }}>{r.name}</span>
+              <span className="text-xs font-bold num flex-shrink-0" style={{ color: r.color }}>{Math.round(r.pct)}¢</span>
             </div>
           )
         })}
@@ -130,16 +128,16 @@ function OutcomesPreview({ market }: { market: Market }) {
   const sorted = [...rows].sort((a, b) => b.pct - a.pct)
   const show = sorted.slice(0, 3)
   return (
-    <div className="space-y-1.5">
+    <div className="space-y-1">
       {show.map(r => {
         const won = resolved && market.resolvedOutcome === BigInt(r.i)
         return (
           <div key={r.i} className="relative rounded-lg overflow-hidden" style={{ background: 'var(--surface-muted)' }}>
             <div className="absolute inset-y-0 left-0 rounded-lg" style={{ width: `${Math.max(3, r.pct)}%`, background: `color-mix(in srgb, ${r.color} ${won ? 40 : 24}%, transparent)`, transition: 'width .5s' }} />
-            <div className="relative flex items-center gap-2 px-2.5 py-1.5">
+            <div className="relative flex items-center gap-2 px-2 py-1">
               <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: r.color }} />
-              <span className="text-xs font-medium truncate flex-1" style={{ color: 'var(--ink)' }}>{r.name}</span>
-              <span className="text-xs font-bold num" style={{ color: won ? 'var(--success)' : 'var(--ink)' }}>{r.pct.toFixed(r.pct < 10 ? 1 : 0)}%</span>
+              <span className="text-[11px] font-medium truncate flex-1" style={{ color: 'var(--ink)' }}>{r.name}</span>
+              <span className="text-[11px] font-bold num" style={{ color: won ? 'var(--success)' : 'var(--ink)' }}>{r.pct.toFixed(r.pct < 10 ? 1 : 0)}%</span>
             </div>
           </div>
         )

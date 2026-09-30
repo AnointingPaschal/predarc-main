@@ -2,8 +2,9 @@
 //   GET  /api/market-image?network=mainnet&markets=1,2,3  → { images: { "1": "/api/image?id=…" } }   (public, cheap)
 //   POST /api/market-image { network, market }            → generates once per market (anyone may trigger; once only)
 //   POST /api/market-image { network, market, force:true }→ regenerate (admin session required)
-// 1) If an image model is set (default google/gemini-2.5-flash-image) it paints an illustration.
-// 2) Otherwise, or if that fails, the normal text model draws a small SVG illustration.
+// 1) The text model writes a precise picture brief from the question and options (specific entities → their visual identifiers).
+// 2) The image model (default google/gemini-2.5-flash-image) paints exactly that brief. Optional: `aiImageSvgFallback` lets the text
+//    model draw a simple SVG when there is no image model. With neither, no image is made (never a generic one).
 // The result is stored in KV (served by /api/image) and its link is saved in the market's meta.imageUrl.
 import { createPublicClient, http } from 'viem'
 import { arc, arcTestnet } from 'viem/chains'
@@ -14,6 +15,7 @@ import { PREDARC_ABI } from '../../src/lib/contract'
 const FALLBACK_RPCS = { mainnet: [...arc.rpcUrls.default.http], testnet: [...arcTestnet.rpcUrls.default.http] }
 const metaKey = (n: string, m: string) => `meta:${n}:${m}`
 const MAX_IMG = 2_500_000
+const IMAGE_V = 2 // bump to regenerate every generated cover
 type ImgEnv = Env & { VITE_CONTRACT_ADDRESS?: string; VITE_TESTNET_CONTRACT_ADDRESS?: string; MAINNET_RPC_URL?: string; TESTNET_RPC_URL?: string }
 
 export const onRequestGet = async ({ request, env }: { request: Request; env: Env }): Promise<Response> => {
@@ -25,8 +27,8 @@ export const onRequestGet = async ({ request, env }: { request: Request; env: En
   const images: Record<string, string> = {}
   await Promise.all(ids.map(async id => {
     try {
-      const m = JSON.parse((await env.PREDARC_KV.get(metaKey(network, id))) || '{}') as { imageUrl?: string }
-      if (m.imageUrl) images[id] = m.imageUrl
+      const m = JSON.parse((await env.PREDARC_KV.get(metaKey(network, id))) || '{}') as { imageUrl?: string; imageV?: number }
+      if (m.imageUrl && (m.imageV ?? 0) >= IMAGE_V) images[id] = m.imageUrl
     } catch { /* skip */ }
   }))
   return json({ images }, 200, { 'cache-control': 'public, max-age=20' })
@@ -48,13 +50,39 @@ function cleanSvg(raw: string): string | null {
   return s
 }
 
+async function visualBrief(apiKey: string, model: string, origin: string, question: string, outcomes: string[], category: string): Promise<string | null> {
+  const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json', 'HTTP-Referer': origin, 'X-Title': 'Predarc Prediction Markets' },
+    body: JSON.stringify({
+      model, temperature: 0.2, max_tokens: 400,
+      messages: [
+        { role: 'system', content: 'You are an art director who writes precise picture briefs for news and prediction-market covers. Reply with ONE paragraph of at most 70 words and nothing else.' },
+        { role: 'user', content: `Write a brief for ONE cover image that shows exactly what this prediction market is about.
+Question: ${question}
+Options: ${outcomes.join(' | ')}
+Category: ${category || 'General'}
+
+Rules:
+- First identify the specific entities in the question (country, region, institution, sports teams, league, coin/company, event, product) and depict THEM through their recognisable visual identifiers: national flag colours and a landmark or parliament building for countries/elections; the exact team colours, kit and sport equipment for sport; the coin's symbol or the company's product for finance/tech; the relevant building, object or scene for events.
+- Name the concrete objects, setting, composition and colour palette. Not generic, not abstract, nothing that could illustrate a different market.
+- No text, letters, numbers or logos in the image. Never depict a real person's face; use a symbolic silhouette or an object instead.` },
+      ],
+    }),
+  })
+  if (!res.ok) return null
+  const data = await res.json() as { choices?: { message?: { content?: string } }[] }
+  const t = (data.choices?.[0]?.message?.content ?? '').replace(/<think>[\s\S]*?<\/think>/gi, '').trim()
+  return t ? t.slice(0, 600) : null
+}
+
 async function paint(apiKey: string, model: string, origin: string, subject: string): Promise<{ type: string; b64: string } | null> {
   const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
     method: 'POST',
     headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json', 'HTTP-Referer': origin, 'X-Title': 'Predarc Prediction Markets' },
     body: JSON.stringify({
       model, modalities: ['image', 'text'],
-      messages: [{ role: 'user', content: `Create a square cover illustration for a prediction market about: "${subject}". Modern editorial style, bold clean shapes, rich but harmonious colours, one clear central subject that visually represents the topic. Absolutely no text, letters, numbers, logos or watermarks. No real people's faces.` }],
+      messages: [{ role: 'user', content: `Create a square cover illustration for a prediction market. ${subject}\n\nStyle: modern editorial illustration, bold clean shapes, rich harmonious colours, one clear focal subject, tidy composition. Absolutely no text, letters, numbers, logos or watermarks. No real person's face.` }],
     }),
   })
   if (!res.ok) return null
@@ -74,7 +102,8 @@ async function drawSvg(apiKey: string, model: string, origin: string, subject: s
       messages: [
         { role: 'system', content: 'You are a vector illustrator. Reply with ONE complete SVG document and nothing else.' },
         { role: 'user', content: `Draw a square cover illustration (viewBox="0 0 256 256") for a prediction market.
-Topic: "${subject}" (category: ${category || 'General'}).
+Picture brief (follow it exactly): ${subject}
+Category: ${category || 'General'}.
 Rules: flat modern vector style; a rich two-colour gradient background filling the whole canvas; one bold, instantly recognisable central subject built from simple shapes that depicts the topic (e.g. a ballot box and stars for elections, a ball and net for sport, coins and a chart line for crypto/finance, a chip and circuits for tech, a globe for world events; use national flag colours for country topics); 2-3 accent shapes. NO text, letters or numbers. Only <svg>, <defs>, <linearGradient>, <radialGradient>, <stop>, <rect>, <circle>, <ellipse>, <path>, <polygon>, <g>. No scripts, images or external references. Under 5KB.` },
       ],
     }),
@@ -95,7 +124,7 @@ export const onRequestPost = async ({ request, env }: { request: Request; env: I
 
   let existing: Record<string, unknown> = {}
   try { existing = JSON.parse((await env.PREDARC_KV.get(metaKey(network, marketId))) || '{}') } catch { /* empty */ }
-  if (existing.imageUrl && !force) return json({ status: 'exists', imageUrl: existing.imageUrl })
+  if (existing.imageUrl && (Number(existing.imageV) || 0) >= IMAGE_V && !force) return json({ status: 'exists', imageUrl: existing.imageUrl })
 
   const lockKey = `lock:image:${network}:${marketId}`
   const cool = Number((await env.PREDARC_KV.get(lockKey)) || 0)
@@ -112,7 +141,7 @@ export const onRequestPost = async ({ request, env }: { request: Request; env: I
   if (!/^0x[0-9a-fA-F]{40}$/.test(contract)) return json({ status: 'unavailable', reason: 'No contract address set.' })
   const priv = ((network === 'testnet' ? env.TESTNET_RPC_URL : env.MAINNET_RPC_URL) || '').trim()
   const urls = [...new Set([priv, (net.rpcUrl || '').trim(), ...FALLBACK_RPCS[network]].filter(Boolean))]
-  type M = { question: string; category: string; imageUrl: string }
+  type M = { question: string; category: string; imageUrl: string; outcomes: string[] }
   const found: { m?: M } = {}
   for (const url of urls) {
     try {
@@ -128,13 +157,17 @@ export const onRequestPost = async ({ request, env }: { request: Request; env: I
   const origin = new URL(request.url).origin
   const imageModel = String(pub.openrouterImageModel ?? 'google/gemini-2.5-flash-image').trim()
   const textModel = String(pub.openrouterModel ?? '').trim() || 'openai/gpt-4o-mini'
+  // Step 1: a precise picture brief about THIS market; step 2: paint exactly that. No brief = no image (never a generic one).
+  let brief: string | null = null
+  try { brief = await visualBrief(apiKey, textModel, origin, m.question, [...m.outcomes], m.category) } catch { /* handled below */ }
+  if (!brief) return json({ status: 'error', reason: 'Could not describe the market for the image model. It will retry later.' })
   let type = '', data = ''
   if (imageModel) {
-    try { const p = await paint(apiKey, imageModel, origin, m.question); if (p) { type = p.type; data = p.b64 } } catch { /* fall back to SVG */ }
+    try { const p = await paint(apiKey, imageModel, origin, brief); if (p) { type = p.type; data = p.b64 } } catch { /* optional SVG fallback below */ }
   }
-  if (!data) {
+  if (!data && pub.aiImageSvgFallback === true) {
     try {
-      const svg = await drawSvg(apiKey, textModel, origin, m.question, m.category)
+      const svg = await drawSvg(apiKey, textModel, origin, brief, m.category)
       if (svg) { type = 'image/svg+xml'; data = toB64(new TextEncoder().encode(svg)) }
     } catch { /* give up below */ }
   }
@@ -143,6 +176,6 @@ export const onRequestPost = async ({ request, env }: { request: Request; env: I
   const id = [...crypto.getRandomValues(new Uint8Array(8))].map(b => b.toString(16).padStart(2, '0')).join('')
   await env.PREDARC_KV.put(`img:${id}`, JSON.stringify({ t: type, d: data }))
   const imageUrl = `/api/image?id=${id}`
-  await env.PREDARC_KV.put(metaKey(network, marketId), JSON.stringify({ ...existing, ...cleanMeta({ imageUrl }) }))
+  await env.PREDARC_KV.put(metaKey(network, marketId), JSON.stringify({ ...existing, ...cleanMeta({ imageUrl, imageV: IMAGE_V, imageBrief: brief }) }))
   return json({ status: 'generated', imageUrl })
 }

@@ -2,7 +2,6 @@ import { useState, useMemo } from 'react'
 import { Search, TrendingUp, Zap, BarChart2, Activity } from 'lucide-react'
 import MarketCard from '../components/MarketCard'
 import HeroPredictions from '../components/HeroPredictions'
-import { useMarketImages } from '../hooks/useMarketImages'
 import { BtcCard } from '../components/BtcPromo'
 import { useAllMarkets } from '../hooks/useMarkets'
 import { Market, MarketStatus, MarketType, CATEGORIES, formatUsdc } from '../lib/contract'
@@ -23,7 +22,7 @@ export default function MarketList() {
   const [typeFilter, setTypeFilter] = useState('All')
 
   const allMarkets = (markets as unknown as Market[] | undefined) ?? []
-  const images = useMarketImages(allMarkets)
+  const images = useMemo(() => Object.fromEntries(allMarkets.map(m => [m.id.toString(), m.imageUrl && !m.imageUrl.startsWith('data:') ? m.imageUrl : ''])), [allMarkets])
 
   const stats = useMemo(() => {
     const open = allMarkets.filter(m => m.status === MarketStatus.Open)

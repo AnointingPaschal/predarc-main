@@ -14,12 +14,19 @@ export const onRequest = async ({ request, env }: { request: Request; env: Env }
   if (request.method === 'GET') {
     const id = url.searchParams.get('id') || ''
     if (!/^[a-f0-9]{16}$/.test(id)) return json({ error: 'bad id' }, 400)
+    // Serve repeat views from Cloudflare's edge cache instead of decoding the KV value every time
+    const edge = (globalThis as unknown as { caches?: { default?: Cache } }).caches?.default
+    const cacheKey = new Request(`${url.origin}/api/image?id=${id}`)
+    const hit = edge ? await edge.match(cacheKey) : undefined
+    if (hit) return hit
     const raw = await env.PREDARC_KV.get(`img:${id}`)
     if (!raw) return json({ error: 'not found' }, 404)
     const { t, d } = JSON.parse(raw) as { t: string; d: string }
     const bin = atob(d); const bytes = new Uint8Array(bin.length)
     for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
-    return new Response(bytes, { headers: { 'content-type': t, 'cache-control': 'public, max-age=31536000, immutable', 'x-content-type-options': 'nosniff', 'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; sandbox" } })
+    const out = new Response(bytes, { headers: { 'content-type': t, 'cache-control': 'public, max-age=31536000, immutable', 'x-content-type-options': 'nosniff', 'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; sandbox" } })
+    if (edge) await edge.put(cacheKey, out.clone())
+    return out
   }
 
   if (request.method === 'POST') {

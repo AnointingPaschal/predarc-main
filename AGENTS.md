@@ -98,5 +98,5 @@ bun run dev
 - Add the address per network in Admin → BTC Rounds. Enable/disable, title, home card and all on-chain settings (fee, limits, window, price feed, keepers, fee withdrawal) are editable there.
 - Price source: set a Chainlink BTC/USD feed on the contract (permissionless), or keeper mode: secret `KEEPER_PRIVATE_KEY` (dedicated wallet with a little USDC for gas), authorize it in the admin tab. `POST /api/btc-keeper?network=...` records the boundary price (pinged by visitors' browsers and optionally an external cron each minute).
 
-## Auto cover images
-`POST /api/market-image` generates a cover for any market without an image using the saved OpenRouter key: an image model (`openrouterImageModel`, default `google/gemini-2.5-flash-image`) or, if blank/failing, an SVG drawn by the normal model. Stored in KV (`/api/image?id=`), link saved in `meta.imageUrl`. Cards/list trigger it once per market (30-minute retry cooldown); admin can `force` regenerate.
+## AI cover images (admin, on demand only)
+Nothing is generated automatically. In Create / Edit market and on AI drafts, "Generate with AI" calls admin-only `POST /api/market-image`: the text model writes a picture brief from the question/options (optionally researching online), the image model (`openrouterImageModel`, default `google/gemini-2.5-flash-image`) paints it, the browser shrinks it to a ~720px JPEG and uploads it via `/api/image`, and the short link is stored on-chain as the market's `imageUrl`. "Regenerate" repeats it; an optional direction hint can steer it.

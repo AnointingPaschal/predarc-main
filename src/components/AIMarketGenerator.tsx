@@ -1,3 +1,4 @@
+import { generateMarketImage } from '../lib/api'
 import { useState, useEffect, useRef } from 'react'
 import { Sparkles, RefreshCw, ChevronDown, ChevronUp, Zap, Newspaper, List, Bot, Check, X, Rocket } from 'lucide-react'
 import { toast } from 'sonner'
@@ -36,9 +37,21 @@ export default function AIMarketGenerator({ onUseMarket, onPublishAll }: AIMarke
   const [publishProgress, setPublishProgress] = useState<{ done: number; total: number } | null>(null)
   const [drafts, setDrafts] = useState<AIMarketDraft[]>([])
   const [expandedIdx, setExpandedIdx] = useState<number | null>(null)
+  const [autoImages, setAutoImages] = useState(false)
+  const [imgBusy, setImgBusy] = useState<Record<string, boolean>>({})
 
   const config = useSiteConfig()
   const hasKey = !!config.openrouterApiKey
+
+  /** Generate (or regenerate) the cover for one draft; the draft is found by question so list changes can't mix images up. */
+  const makeImage = async (d: AIMarketDraft) => {
+    setImgBusy(b => ({ ...b, [d.question]: true }))
+    try {
+      const url = await generateMarketImage({ question: d.question, outcomes: d.marketType === 2 ? [] : d.outcomes, category: d.category, webSearch: config.openrouterWebSearch })
+      setDrafts(list => list.map(x => (x.question === d.question ? { ...x, imageUrl: url } : x)))
+    } catch (e) { toast.error(`Image failed: ${e instanceof Error ? e.message : 'unknown error'}`) }
+    finally { setImgBusy(b => ({ ...b, [d.question]: false })) }
+  }
 
   // ── Auto-generation ────────────────────────────────────────────────────────
   // While the admin panel is open and auto-gen is enabled in Config, draft new
@@ -130,6 +143,7 @@ export default function AIMarketGenerator({ onUseMarket, onPublishAll }: AIMarke
         model: config.openrouterModel || 'openai/gpt-4o-mini',
       })
       setDrafts(results)
+      if (autoImages && results.length) void (async () => { for (const d of results) await makeImage(d) })()
       if (results.length === 0) {
         toast.warning('AI returned no markets. Try a different topic or model.')
       } else {
@@ -285,6 +299,11 @@ export default function AIMarketGenerator({ onUseMarket, onPublishAll }: AIMarke
             </div>
           </div>
 
+          <label className="flex items-start gap-2 text-xs cursor-pointer" style={{ color: 'var(--muted)' }}>
+            <input type="checkbox" className="mt-0.5" checked={autoImages} onChange={e => setAutoImages(e.target.checked)} />
+            <span>Also generate a cover image for each market (strictly about that market{config.openrouterWebSearch ? ', researched online' : ''}). Uses image-model credit; you can redo any image afterwards.</span>
+          </label>
+
           {/* Generate button */}
           <button
             onClick={() => void handleGenerate()}
@@ -318,6 +337,7 @@ export default function AIMarketGenerator({ onUseMarket, onPublishAll }: AIMarke
                 >
                   {/* Card header */}
                   <div className="flex items-start gap-3 p-3">
+                    {draft.imageUrl && <img src={draft.imageUrl} alt="" className="w-14 h-14 rounded-lg object-cover flex-shrink-0" style={{ border: '1px solid var(--border)' }} />}
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 mb-1">
                         <span
@@ -346,6 +366,15 @@ export default function AIMarketGenerator({ onUseMarket, onPublishAll }: AIMarke
                         style={{ background: 'var(--accent)', color: 'var(--accent-text, #fff)' }}
                       >
                         <Check size={11} /> Use
+                      </button>
+                      <button
+                        onClick={() => { void makeImage(draft) }}
+                        disabled={!!imgBusy[draft.question]}
+                        className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs disabled:opacity-60"
+                        style={{ background: 'var(--surface)', color: 'var(--muted)', border: '1px solid var(--border)' }}
+                        title="Strictly about this market; click again to regenerate"
+                      >
+                        <Sparkles size={11} className={imgBusy[draft.question] ? 'animate-pulse' : ''} /> {imgBusy[draft.question] ? '…' : draft.imageUrl ? 'Redo image' : 'Image'}
                       </button>
                       <button
                         onClick={() => setDrafts(d => d.filter((_, i) => i !== idx))}

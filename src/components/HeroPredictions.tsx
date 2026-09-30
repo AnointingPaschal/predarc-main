@@ -55,7 +55,7 @@ export default function HeroPredictions({ markets, images }: { markets: Market[]
 
 function Slide({ market, image }: { market: Market; image?: string }) {
   const { data: fee } = usePlatformFee()
-  const activity = useMarketActivity(market.id, market.outcomes.length, market.outcomePools as bigint[], market.totalLiquidity, fee as bigint | undefined)
+  const activity = useMarketActivity(market.id, market.outcomes.length, market.outcomePools as bigint[], market.totalLiquidity, fee as bigint | undefined, 2500)
   const prices = useMemo(() => pricesFromPools([...market.outcomePools]), [market])
   const rows = market.outcomes.map((name, k) => ({ name, k, p: getMarketPrice(market, k) })).sort((a, b) => b.p - a.p).slice(0, 4)
   const [bad, setBad] = useState(false)

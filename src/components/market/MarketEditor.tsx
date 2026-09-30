@@ -81,7 +81,7 @@ export default function MarketEditor({ market, meta, onMeta, onClose, onSaved }:
         </div>
         <div className={canChain ? '' : 'opacity-50 pointer-events-none'}>
           <label className={label} style={{ color: 'var(--subtle)' }}>Image (onchain link)</label>
-          <ImagePicker value={imageUrl} onChange={setImageUrl} />
+          <ImagePicker value={imageUrl} onChange={setImageUrl} ai={{ question, outcomes: market.outcomes, category }} />
         </div>
         {open && (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

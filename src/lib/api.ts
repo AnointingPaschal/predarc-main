@@ -98,28 +98,38 @@ export async function requestAnalysis(market: bigint, force = false): Promise<An
 export async function uploadMarketImage(file: File): Promise<string> {
   if (!file.type.startsWith('image/')) throw new Error('Choose an image file.')
   const bmp = await createImageBitmap(file)
-  const scale = Math.min(1, 1000 / Math.max(bmp.width, bmp.height))
+  const scale = Math.min(1, 720 / Math.max(bmp.width, bmp.height))
   const canvas = document.createElement('canvas')
   canvas.width = Math.round(bmp.width * scale); canvas.height = Math.round(bmp.height * scale)
   canvas.getContext('2d')!.drawImage(bmp, 0, 0, canvas.width, canvas.height)
-  const blob: Blob = await new Promise((res, rej) => canvas.toBlob(b => (b ? res(b) : rej(new Error('Could not process the image.'))), 'image/jpeg', 0.85))
+  const blob: Blob = await new Promise((res, rej) => canvas.toBlob(b => (b ? res(b) : rej(new Error('Could not process the image.'))), 'image/jpeg', 0.82))
   const r = await fetch('/api/image', { method: 'POST', headers: { 'content-type': 'image/jpeg', ...adminAuthHeaders() }, body: blob })
   const body = (await r.json().catch(() => ({}))) as { path?: string; error?: string }
   if (!r.ok || !body.path) throw new Error(body.error || `Upload failed (${r.status})`)
   return `${window.location.origin}${body.path}`
 }
 
-// ── Cover images ─────────────────────────────────────────────────────────────
-export async function fetchMarketImages(ids: (bigint | string)[], network: Network = getEffectiveNetwork()): Promise<Record<string, string>> {
-  if (!ids.length) return {}
-  const r = await fetch(`/api/market-image?network=${network}&markets=${ids.map(String).join(',')}`)
-  return ((await r.json()) as { images?: Record<string, string> }).images ?? {}
+// ── AI cover image (admin, on demand) ────────────────────────────────────────
+async function rasterize(type: string, b64: string): Promise<Blob> {
+  const src = `data:${type};base64,${b64}`
+  const img = new Image()
+  await new Promise<void>((res, rej) => { img.onload = () => res(); img.onerror = () => rej(new Error('Could not read the generated image.')); img.src = src })
+  const w = img.naturalWidth || 512, h = img.naturalHeight || 512
+  const scale = Math.min(1, 720 / Math.max(w, h))
+  const canvas = document.createElement('canvas')
+  canvas.width = Math.round(w * scale) || 512; canvas.height = Math.round(h * scale) || 512
+  canvas.getContext('2d')!.drawImage(img, 0, 0, canvas.width, canvas.height)
+  return new Promise((res, rej) => canvas.toBlob(b => (b ? res(b) : rej(new Error('Could not process the image.'))), 'image/jpeg', 0.82))
 }
-export async function requestMarketImage(market: bigint | string, opts: { force?: boolean; network?: Network } = {}): Promise<{ status: string; imageUrl?: string; reason?: string }> {
-  const r = await fetch('/api/market-image', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', ...(opts.force ? adminAuthHeaders() : {}) },
-    body: JSON.stringify({ network: opts.network ?? getEffectiveNetwork(), market: String(market), force: opts.force === true }),
-  })
-  return r.json()
+
+/** Generates a cover strictly about this market, shrinks it, uploads it, and returns the (short) image link. */
+export async function generateMarketImage(o: { question: string; outcomes: string[]; category?: string; webSearch?: boolean; hint?: string }): Promise<string> {
+  const r = await fetch('/api/market-image', { method: 'POST', headers: { 'content-type': 'application/json', ...adminAuthHeaders() }, body: JSON.stringify(o) })
+  const body = (await r.json().catch(() => ({}))) as { type?: string; data?: string; error?: string }
+  if (!r.ok || !body.data || !body.type) throw new Error(body.error || `Image generation failed (${r.status})`)
+  const blob = await rasterize(body.type, body.data)
+  const up = await fetch('/api/image', { method: 'POST', headers: { 'content-type': 'image/jpeg', ...adminAuthHeaders() }, body: blob })
+  const ub = (await up.json().catch(() => ({}))) as { path?: string; error?: string }
+  if (!up.ok || !ub.path) throw new Error(ub.error || `Upload failed (${up.status})`)
+  return `${window.location.origin}${ub.path}`
 }

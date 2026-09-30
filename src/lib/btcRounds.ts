@@ -1,5 +1,5 @@
 // "Bitcoin Up or Down" rounds — contract ABI, live price feed and chain reads.
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { usePublicClient } from 'wagmi'
 import { parseAbi, parseAbiItem } from 'viem'
@@ -176,48 +176,35 @@ export async function fetchCandles(minutes = 60): Promise<PricePoint[]> {
   return rows.map(c => ({ t: c[0] * 1000, p: c[4] })).sort((a, b) => a.t - b.t)
 }
 
-/** Streams the BTC/USD price. Uses Coinbase's websocket, and falls back to polling if it can't connect. */
+// One shared price poller for the whole app (home card, hero, footer and Bitcoin page all read the same data).
+interface LiveState { price: number | null; points: PricePoint[]; live: boolean }
+let liveState: LiveState = { price: null, points: [], live: false }
+const liveSubs = new Set<(s: LiveState) => void>()
+let liveTimer: ReturnType<typeof setInterval> | null = null
+let lastPush = 0
+const setLive = (patch: Partial<LiveState>) => { liveState = { ...liveState, ...patch }; liveSubs.forEach(f => f(liveState)) }
+async function livePoll() {
+  try {
+    const p = await fetchSpot()
+    const t = Date.now()
+    const keep = t - lastPush >= 1500
+    if (keep) lastPush = t
+    setLive({ price: p, live: true, ...(keep ? { points: [...liveState.points.filter(x => t - x.t < 65 * 60 * 1000), { t, p }] } : {}) })
+  } catch { /* keep the last price */ }
+}
+function liveStart() {
+  if (liveTimer) return
+  fetchCandles(60).then(c => { if (c.length) setLive({ points: [...c, ...liveState.points.filter(x => !c.length || x.t > c[c.length - 1].t)] }) }).catch(() => { /* fills from live ticks */ })
+  void livePoll()
+  liveTimer = setInterval(() => { if (!document.hidden) void livePoll() }, 3000)
+}
+function liveStop() { if (liveTimer && liveSubs.size === 0) { clearInterval(liveTimer); liveTimer = null } }
+
+/** Live BTC/USD price and recent points (polled every 3s through the edge-cached /api/btc-price proxy, shared by every component). */
 export function useLiveBtcPrice(): { price: number | null; points: PricePoint[]; live: boolean } {
-  const [price, setPrice] = useState<number | null>(null)
-  const [points, setPoints] = useState<PricePoint[]>([])
-  const [live, setLive] = useState(false)
-  const last = useRef(0)
-
-  useEffect(() => {
-    let closed = false
-    let ws: WebSocket | null = null
-    let poll: ReturnType<typeof setInterval> | null = null
-    const push = (p: number, t = Date.now()) => {
-      setPrice(p)
-      if (t - last.current >= 1000) {
-        last.current = t
-        setPoints(prev => [...prev.filter(x => t - x.t < 65 * 60 * 1000), { t, p }])
-      }
-    }
-    fetchCandles(60).then(c => { if (!closed) setPoints(c) }).catch(() => { /* chart fills from live ticks */ })
-    fetchSpot().then(p => { if (!closed) push(p) }).catch(() => { /* wait for the stream */ })
-
-    const startPolling = () => {
-      if (poll) return
-      poll = setInterval(() => fetchSpot().then(p => { if (!closed) { setLive(true); push(p) } }).catch(() => { /* keep last price */ }), 2000)
-    }
-    startPolling() // the proxy is the reliable baseline; the websocket (if it connects) only makes it smoother
-    try {
-      ws = new WebSocket('wss://ws-feed.exchange.coinbase.com')
-      ws.onopen = () => ws?.send(JSON.stringify({ type: 'subscribe', product_ids: ['BTC-USD'], channels: ['ticker'] }))
-      ws.onmessage = ev => {
-        try {
-          const m = JSON.parse(ev.data as string) as { type?: string; price?: string }
-          if (m.type === 'ticker' && m.price) { setLive(true); push(Number(m.price)) }
-        } catch { /* ignore */ }
-      }
-      ws.onerror = () => { /* polling keeps running */ }
-      ws.onclose = () => { /* polling keeps running */ }
-    } catch { startPolling() }
-    return () => { closed = true; ws?.close(); if (poll) clearInterval(poll) }
-  }, [])
-
-  return { price, points, live }
+  const [s, setS] = useState<LiveState>(liveState)
+  useEffect(() => { liveSubs.add(setS); setS(liveState); liveStart(); return () => { liveSubs.delete(setS); liveStop() } }, [])
+  return s
 }
 
 // ── Keeper (server) ──────────────────────────────────────────────────────────

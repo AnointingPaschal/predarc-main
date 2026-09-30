@@ -100,3 +100,10 @@ bun run dev
 
 ## AI cover images (admin, on demand only)
 Nothing is generated automatically. In Create / Edit market and on AI drafts, "Generate with AI" calls admin-only `POST /api/market-image`: the text model writes a picture brief from the question/options (optionally researching online), the image model (`openrouterImageModel`, default `google/gemini-2.5-flash-image`) paints it, the browser shrinks it to a ~720px JPEG and uploads it via `/api/image`, and the short link is stored on-chain as the market's `imageUrl`. "Regenerate" repeats it; an optional direction hint can steer it.
+
+## Soccer betting (Sports)
+- Admin → **Sports**: pick leagues (any ESPN soccer code works), days ahead, betting lines and liquidity, load fixtures, then create. Each line is its own market on the existing `PredarcMarket` contract (category `Soccer`, hidden from the home grid, shown under `/sports`). 1X2 = 3-outcome multiple choice; double chance (1X/12/X2), Over/Under 0.5–5.5, GG/NG, odd/even, clean sheets and win-to-nil are Yes/No or two-way binary markets. Definitions and settlement rules: `src/lib/sportsCore.ts`.
+- Trading closes at kick-off; markets become resolvable 2h later. Fixtures and results come from ESPN's public scoreboard (`functions/_sports.ts`); no API key. Generated matches are kept in KV `sports:<network>`.
+- Settlement uses the 90-minute score. Extra time/penalties/postponed matches are flagged for manual settlement in the admin tab. Cancelled/abandoned matches cancel their markets (refunds).
+- Auto-settle: `POST /api/sports-keeper?network=…` resolves everything finished. The contract only lets its OWNER resolve, so set the secret `SPORTS_RESOLVER_PRIVATE_KEY` to the owner wallet's key (fund it with a little USDC for gas). Visitors' browsers ping it while on /sports; add a cron ping every 5 min for reliability. Without the key, use Admin → Sports → "Settle now" (signs with the admin wallet).
+- Toggles in Admin → Sports: `sportsEnabled`, `sportsAutoSettle`.

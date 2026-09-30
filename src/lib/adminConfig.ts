@@ -77,6 +77,11 @@ export interface SiteConfig {
   btcShowOnHome: boolean       // promo card on the home page
   btcTitle: string             // heading shown on the rounds page and card
   btcAutoKeeper: boolean       // visitors' browsers ping the keeper so rounds always advance
+
+  // Soccer betting
+  sportsEnabled: boolean       // show the Sports section (off = hidden everywhere)
+  sportsAutoSettle: boolean    // visitors' browsers ping the settlement keeper after matches end
+  sportsLiquidityUsdc: number  // default starting liquidity per generated market
 }
 
 export const DEFAULT_DARK: ThemeColors = {
@@ -168,6 +173,9 @@ export const DEFAULT_CONFIG: SiteConfig = {
   btcShowOnHome: true,
   btcTitle: 'Bitcoin Up or Down',
   btcAutoKeeper: true,
+  sportsEnabled: true,
+  sportsAutoSettle: true,
+  sportsLiquidityUsdc: 10,
 }
 
 // ── Per-network helpers ──────────────────────────────────────────────────────

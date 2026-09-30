@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { ConnectKitButton } from 'connectkit'
 import { Link, useLocation } from 'react-router-dom'
-import { BarChart2, Shield, Sun, Moon, Menu, X, TrendingUp, Briefcase } from 'lucide-react'
+import { BarChart2, Shield, Trophy, Sun, Moon, Menu, X, TrendingUp, Briefcase } from 'lucide-react'
 import { useAccount } from 'wagmi'
 import { useSiteConfig, reapplyThemeVars, isAdminAddress } from '../lib/adminConfig'
 import BtcLogo from './BtcLogo'
@@ -16,6 +16,7 @@ export default function Navbar() {
   const { address } = useAccount()
   const isAdmin = isAdminAddress(address, config.adminWallet)
   const btcOn = useBtcAvailable()
+  const sportsOn = config.sportsEnabled !== false
 
   const isActive = (path: string) =>
     path === '/' ? location.pathname === '/' : location.pathname.startsWith(path)
@@ -74,6 +75,7 @@ export default function Navbar() {
             <NavLink to="/" active={isActive('/')} icon={<TrendingUp size={13} strokeWidth={2} />}>
               Markets
             </NavLink>
+            {sportsOn && <NavLink to="/sports" active={isActive('/sports')} icon={<Trophy size={13} />}>Sports</NavLink>}
             {btcOn && <NavLink to="/btc" active={isActive('/btc')} icon={<BtcLogo size={13} />}>Bitcoin</NavLink>}
             <NavLink to="/portfolio" active={isActive('/portfolio')} icon={<Briefcase size={13} strokeWidth={2} />}>
               Portfolio
@@ -136,6 +138,7 @@ export default function Navbar() {
             style={{ borderColor: 'var(--border)', background: 'var(--nav-bg)' }}
           >
             <MobileNavLink to="/" active={isActive('/')} icon={<TrendingUp size={14} />}>Markets</MobileNavLink>
+            {sportsOn && <MobileNavLink to="/sports" active={isActive('/sports')} icon={<Trophy size={14} />}>Sports</MobileNavLink>}
             {btcOn && <MobileNavLink to="/btc" active={isActive('/btc')} icon={<BtcLogo size={14} />}>Bitcoin 5m</MobileNavLink>}
             <MobileNavLink to="/portfolio" active={isActive('/portfolio')} icon={<Briefcase size={14} />}>Portfolio</MobileNavLink>
             {isAdmin && <MobileNavLink to="/admin" active={isActive('/admin')} icon={<Shield size={14} />}>Admin</MobileNavLink>}

@@ -38,6 +38,7 @@ export default function MarketList() {
     return allMarkets.filter(market => {
       if (search && !market.question.toLowerCase().includes(search.toLowerCase())) return false
       if (category !== 'All' && market.category !== category) return false
+      if (category === 'All' && market.category === 'Soccer') return false // soccer lines live under /sports
       if (status === 'Open' && market.status !== MarketStatus.Open) return false
       if (status === 'Resolved' && market.status !== MarketStatus.Resolved) return false
       if (status === 'Closed' && market.status !== MarketStatus.Closed) return false
@@ -54,7 +55,7 @@ export default function MarketList() {
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8">
 
-      <HeroPredictions markets={allMarkets} images={images} />
+      <HeroPredictions markets={allMarkets.filter(m => m.category !== 'Soccer')} images={images} />
 
       <div>
         <div className="min-w-0">

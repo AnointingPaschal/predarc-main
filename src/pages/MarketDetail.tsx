@@ -29,6 +29,11 @@ const card = { background: 'var(--surface)', border: '1px solid var(--border)' }
 export default function MarketDetail() {
   const { id } = useParams<{ id: string }>()
   const marketId = id && /^\d+$/.test(id) ? BigInt(id) : undefined
+  return <MarketView key={id} marketId={marketId} />
+}
+
+/** The full market screen. `embedded` drops the page chrome so other pages (e.g. a soccer match) can host it. */
+export function MarketView({ marketId, embedded = false, initialOutcome = 0 }: { marketId: bigint | undefined; embedded?: boolean; initialOutcome?: number }) {
   const network = useNetwork()
   const config = useSiteConfig()
   const { address } = useAccount()
@@ -40,7 +45,7 @@ export default function MarketDetail() {
   const feeBps = feeRaw !== undefined ? BigInt(feeRaw as bigint) : 200n
   const redeem = useRedeemWinnings()
 
-  const [outcome, setOutcome] = useState(0)
+  const [outcome, setOutcome] = useState(initialOutcome)
   const [params, setParams] = useSearchParams()
   const [editing, setEditing] = useState(false)
   useEffect(() => { if (params.get('edit') === '1') setEditing(true) }, [params])
@@ -110,8 +115,8 @@ export default function MarketDetail() {
   }
 
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6">
-      <Link to="/" className="flex items-center gap-2 text-sm mb-4 hover:opacity-80" style={{ color: 'var(--subtle)' }}><ArrowLeft size={14} />All Markets</Link>
+    <div className={embedded ? '' : 'max-w-7xl mx-auto px-4 sm:px-6 py-6'}>
+      {!embedded && <Link to="/" className="flex items-center gap-2 text-sm mb-4 hover:opacity-80" style={{ color: 'var(--subtle)' }}><ArrowLeft size={14} />All Markets</Link>}
 
       <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_360px] gap-5">
         <div className="space-y-5 min-w-0">

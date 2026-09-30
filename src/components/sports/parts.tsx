@@ -29,7 +29,7 @@ export function OddsButton({ market, index, label, selected, onClick, compact }:
     <button
       disabled={!market || !onClick}
       onClick={onClick}
-      className={`flex flex-col items-center justify-center rounded-lg ${compact ? 'px-2 py-1.5' : 'px-3 py-2'} min-w-0 theme-transition disabled:cursor-default`}
+      className={`flex flex-col items-center justify-center rounded-xl ${compact ? 'px-1.5 py-1.5' : 'px-3 py-2.5'} min-w-0 theme-transition disabled:cursor-default ${market && !selected ? 'hover:brightness-95' : ''}`}
       style={{
         background: selected ? 'var(--accent)' : won ? 'color-mix(in srgb, var(--accent) 25%, var(--surface))' : 'var(--surface-muted)',
         color: selected ? 'var(--accent-text)' : lost ? 'var(--subtle)' : 'var(--ink)',
@@ -37,8 +37,8 @@ export function OddsButton({ market, index, label, selected, onClick, compact }:
         opacity: market && !open && !won && !lost ? 0.6 : 1,
       }}
     >
-      <span className="text-[11px] truncate max-w-full" style={{ opacity: .75 }}>{label}</span>
-      <span className="text-sm font-bold tabular-nums">{won ? '✓' : market ? decimalOdds(p) : '—'}</span>
+      <span className="text-[10.5px] font-medium truncate max-w-full" style={{ opacity: .7 }}>{label}</span>
+      <span className={`${compact ? 'text-[13px]' : 'text-[15px]'} font-bold tabular-nums`}>{won ? '✓' : market ? decimalOdds(p) : '—'}</span>
     </button>
   )
 }
